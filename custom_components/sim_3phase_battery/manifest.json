@@ -1,0 +1,10 @@
+{
+  "domain": "sim_3phase_battery",
+  "name": "BatteryLabs 3-Phase",
+  "version": "4.0.0",
+  "documentation": "https://github.com/jordy101091/myhome",
+  "config_flow": true,
+  "dependencies": [],
+  "codeowners": ["@jordy101091"],
+  "iot_class": "calculated"
+}
