@@ -1,98 +1,98 @@
 # ⚡ BatteryLabs 3-Phase
-### De slimste virtuele batterij voor je Home Assistant
+### The smartest virtual battery for your Home Assistant
 
-**Stel je voor:** je hebt zonnepanelen, een dynamisch energiecontract bij Zonneplan, en je vraagt je elke dag af — laad ik nu, of wacht ik op een goedkoper tarief? Verkoop ik mijn zonneoverschot terug, of spaar ik het op voor de avondpiek? En wat zou ik eigenlijk besparen als ik een thuisbatterij zou installeren?
+**Imagine:** you have solar panels, a dynamic energy contract with Zonneplan, and every day you wonder — should I charge now, or wait for a cheaper rate? Should I sell my solar surplus back, or save it for the evening peak? And what would I actually save if I installed a home battery?
 
-**BatteryLabs 3-Phase geeft je het antwoord.** Niet als spreadsheet, niet als ruwe schatting — maar als een volwaardige, draaiende simulatie in Home Assistant die elke 5 seconden meedenkt met jouw energieverbruik.
-
----
-
-## Wat doet het precies?
-
-BatteryLabs simuleert een **fysiek thuisbatterijsysteem van Victron MultiPlus-II omvormers en Pylontech lithium-batterijen** — gebaseerd op echte datasheet-waarden. De integratie leest je P1-meter uit, denkt mee met de actuele en verwachte energieprijzen, en berekent in real-time wat een batterij zou doen als die er stond.
-
-Het resultaat: meer dan **30 sensoren** in je Home Assistant die je precies vertellen hoe je systeem presteert, hoeveel je bespaart, hoe gezond je (virtuele) batterij is — en wat de slimste actie is voor het komende uur.
-
-**Geen batterij nodig om te beginnen.** Simuleer eerst, investeer daarna op basis van echte data.
+**BatteryLabs 3-Phase gives you the answer.** Not as a spreadsheet, not as a rough estimate — but as a fully-fledged, running simulation in Home Assistant that thinks along with your energy usage every 5 seconds.
 
 ---
 
-## Waarom BatteryLabs anders is
+## What exactly does it do?
 
-De meeste energieplugins tellen kWh's en stoppen daar. BatteryLabs gaat verder:
+BatteryLabs simulates a **physical home battery system made up of Victron MultiPlus-II inverters and Pylontech lithium batteries** — based on real datasheet values. The integration reads your P1 meter, factors in current and forecast energy prices, and calculates in real time what a battery would do if one were installed.
 
-**🔬 Echte hardware, echte fysica**
-De simulatie is gebaseerd op de officiële datasheets van Victron en Pylontech. De omvormer derogeert bij hoge temperatuur. De batterij verliest capaciteit bij kou. Het rendement is niet een vaste 95% maar een kwadratische curve — want bij 10% belasting presteert een omvormer nu eenmaal anders dan bij vol vermogen. Zo voelt de simulatie aan als een echte installatie.
+The result: more than **30 sensors** in your Home Assistant that tell you exactly how your system is performing, how much you're saving, how healthy your (virtual) battery is — and what the smartest action is for the coming hour.
 
-**🧠 Een batterij die leert**
-De *Smart Pro* modus bouwt over 2 tot 4 weken een profiel op van jouw verbruikspatroon. Dagelijkse routines, weekendgedrag, ochtendpieken en avondpieken — de integratie leert ze allemaal. Vanaf dat moment stuurt de batterij niet meer reactief op de P1-meter, maar **proactief op basis van wat er gaat komen**.
-
-**📈 Prijsoptimalisatie op basis van echte tariefdata**
-Met een Zonneplan dynamisch contract weet de integratie de energieprijzen van de komende 48 uur. Goedkope uren (nacht, middagzon), dure uren (ochtend- en avondpiek) — het systeem plant automatisch wanneer te laden, wanneer te ontladen, en wanneer de lading vast te houden voor als het echt nodig is. Zelfs **negatieve prijzen** worden herkend: als het net je betaalt om stroom af te nemen, laad je de batterij.
-
-**☀️ Zon-bewust plannen**
-Via de forecast.solar integratie weet het systeem hoeveel productie er morgen verwacht wordt. Weinig zon? Dan laad je vannacht bij goedkoop tarief een buffer op. Veel zon? Dan hoef je niets te doen — de batterij vult zichzelf overdag.
-
-**💶 ROI die je kunt volgen**
-Elke euro die de simulatie bespaart wordt bijgehouden. Je ziet live hoeveel je al gespaard hebt, wat de gemiddelde energieprijs was bij ontladen, en wanneer een echte batterijinstallatie zichzelf terugverdiend zou hebben.
+**No battery required to get started.** Simulate first, invest later based on real data.
 
 ---
 
-## Hardware die gesimuleerd wordt
+## Why BatteryLabs is different
 
-### Omvormer — Victron MultiPlus-II 48V
+Most energy plugins just count kWh and stop there. BatteryLabs goes further:
 
-| Model | Continu vermogen | Laadstroom | Max. rendement |
+**🔬 Real hardware, real physics**
+The simulation is based on the official datasheets from Victron and Pylontech. The inverter derates at high temperatures. The battery loses capacity in the cold. Efficiency isn't a fixed 95% but a quadratic curve — because an inverter simply performs differently at 10% load than at full power. This makes the simulation feel like a real installation.
+
+**🧠 A battery that learns**
+The *Smart Pro* mode builds a profile of your consumption pattern over 2 to 4 weeks. Daily routines, weekend behavior, morning peaks and evening peaks — the integration learns them all. From that point on, the battery no longer reacts purely to the P1 meter, but **proactively anticipates what's coming**.
+
+**📈 Price optimization based on real tariff data**
+With a Zonneplan dynamic contract, the integration knows energy prices for the next 48 hours. Cheap hours (night, midday sun), expensive hours (morning and evening peaks) — the system automatically plans when to charge, when to discharge, and when to hold the charge for when it's really needed. Even **negative prices** are recognized: if the grid pays you to consume electricity, the battery charges.
+
+**☀️ Sun-aware planning**
+Via the forecast.solar integration, the system knows how much production is expected tomorrow. Little sun? Then it charges a buffer overnight at a cheap rate. Lots of sun? Then nothing needs to happen — the battery fills itself during the day.
+
+**💶 ROI you can track**
+Every euro the simulation saves is tracked. You can see live how much you've saved so far, what the average energy price was when discharging, and when a real battery installation would have paid for itself.
+
+---
+
+## Hardware being simulated
+
+### Inverter — Victron MultiPlus-II 48V
+
+| Model | Continuous power | Charge current | Max. efficiency |
 |---|---|---|---|
-| MultiPlus-II 48/3000 | 2400W / fase | 35A | 95% |
-| MultiPlus-II 48/5000 | 4000W / fase | 70A | 96% |
-| MultiPlus-II 48/8000 | 6400W / fase | 110A | 95% |
-| MultiPlus-II 48/10000 | 8000W / fase | 140A | 96% |
-| MultiPlus-II 48/15000 | 12000W / fase | 200A | 95% |
+| MultiPlus-II 48/3000 | 2400W / phase | 35A | 95% |
+| MultiPlus-II 48/5000 | 4000W / phase | 70A | 96% |
+| MultiPlus-II 48/8000 | 6400W / phase | 110A | 95% |
+| MultiPlus-II 48/10000 | 8000W / phase | 140A | 96% |
+| MultiPlus-II 48/15000 | 12000W / phase | 200A | 95% |
 
-De simulatie gebruikt **één unit per fase** — standaard 3-fase opstelling. Alle vermogenslimieten, temperatuurderotering en rendementsberekeningen zijn direct van de officiële Victron datasheet.
+The simulation uses **one unit per phase** — a standard 3-phase setup. All power limits, thermal derating, and efficiency calculations come directly from the official Victron datasheet.
 
-### Batterij — Pylontech US-serie (LFP)
+### Battery — Pylontech US series (LFP)
 
-| Model | Capaciteit | Bruikbaar | Cycluslevensduur |
+| Model | Capacity | Usable | Cycle life |
 |---|---|---|---|
-| US2000C | 2.4 kWh | 2.28 kWh | >8.000 cycli |
-| US3000C | 3.55 kWh | 3.37 kWh | >8.000 cycli |
-| US5000 | 4.8 kWh | 4.56 kWh | >8.000 cycli |
+| US2000C | 2.4 kWh | 2.28 kWh | >8,000 cycles |
+| US3000C | 3.55 kWh | 3.37 kWh | >8,000 cycles |
+| US5000 | 4.8 kWh | 4.56 kWh | >8,000 cycles |
 
-Configureerbaar van 1 tot 16 modules parallel — van 2.4 kWh tot 76.8 kWh. De simulatie modelleert het **vlakke LFP-spanningsprofiel** (het kenmerkende plateau van lithium-ijzerfosfaat), temperatuurcorrectie op capaciteit, en degradatie op basis van ontladingsdiepte.
+Configurable from 1 to 16 modules in parallel — from 2.4 kWh to 76.8 kWh. The simulation models the **flat LFP voltage profile** (the characteristic plateau of lithium iron phosphate), temperature correction on capacity, and degradation based on depth of discharge.
 
 ---
 
-## De vier modi
+## The four modes
 
-### 🌿 Eco (Zelfverbruik)
-De batterij volgt puur de P1-meter. Overschot van zonnepanelen gaat de batterij in; zodra het huis stroom trekt, levert de batterij. Simpel, stabiel, altijd beschikbaar.
+### 🌿 Eco (Self-consumption)
+The battery follows the P1 meter purely. Solar surplus goes into the battery; as soon as the house draws power, the battery delivers it. Simple, stable, always available.
 
 ### ⚡ Smart (Dynamic)
-Slim reageren op het momentane verbruik per fase. De batterij balanceert per fase en minimaliseert netimport — zonder naar de toekomst te kijken.
+Reacts intelligently to instantaneous consumption per phase. The battery balances per phase and minimizes grid import — without looking ahead.
 
 ### 🔋 Full Charge (Force)
-De batterij laadt zo snel mogelijk op tot 100%. Handig voor wanneer er een stroomstoring verwacht wordt, of als je handmatig een volledige lading wilt opbouwen.
+The battery charges to 100% as fast as possible. Handy for when a power outage is expected, or if you manually want to build up a full charge.
 
-### 🤖 Smart Pro (Predictief)
-De meest intelligente modus. Combineert jouw verbruiksprofiel, de PV-productieverwachting en de uurprijzen van Zonneplan tot een **24-uursplan**. De integratie besluit zelfstandig wanneer te laden, wanneer te ontladen, wanneer te wachten — met als enig doel: maximale zelfverbruik en minimale energiekosten.
+### 🤖 Smart Pro (Predictive)
+The most intelligent mode. Combines your consumption profile, PV production forecast, and Zonneplan's hourly prices into a **24-hour plan**. The integration independently decides when to charge, when to discharge, when to wait — with the sole goal of maximizing self-consumption and minimizing energy costs.
 
-> **Let op:** Smart Pro heeft een leerperiode van minimaal 2 weken nodig. In die tijd draait de integratie automatisch in Smart Dynamic modus. Na 4 weken is het profiel volledig betrouwbaar. Je kunt de voortgang volgen via de *Leerprofiel Voortgang* sensor.
+> **Note:** Smart Pro needs a learning period of at least 2 weeks. During that time, the integration automatically runs in Smart Dynamic mode. After 4 weeks the profile is fully reliable. You can track progress via the *Learning Profile Progress* sensor.
 
 ---
 
-## Installatie
+## Installation
 
-### Vereisten
-- Home Assistant (Core 2024.1 of nieuwer)
-- P1-meter integratie met sensoren voor import én export per fase (L1, L2, L3)
-- Een temperatuursensor (buiten of binnen — voor thermische simulatie)
-- Een stroomprijs-sensor (bijv. van de Zonneplan of ENTSO-E integratie)
+### Requirements
+- Home Assistant (Core 2024.1 or newer)
+- P1 meter integration with sensors for import and export per phase (L1, L2, L3)
+- A temperature sensor (outdoor or indoor — for thermal simulation)
+- An electricity price sensor (e.g. from the Zonneplan or ENTSO-E integration)
 
-### Stap 1 — Bestanden plaatsen
+### Step 1 — Place the files
 
-Kopieer de map `sim_3phase_battery` naar je Home Assistant configuratiemap:
+Copy the `sim_3phase_battery` folder to your Home Assistant configuration directory:
 
 ```
 /config/custom_components/sim_3phase_battery/
@@ -106,147 +106,147 @@ Kopieer de map `sim_3phase_battery` naar je Home Assistant configuratiemap:
 └── sensor.py
 ```
 
-### Stap 2 — Herstart Home Assistant
+### Step 2 — Restart Home Assistant
 
-Herstart volledig zodat de integratie herkend wordt.
+Restart fully so the integration is recognized.
 
-### Stap 3 — Integratie toevoegen
+### Step 3 — Add the integration
 
-Ga naar **Instellingen → Apparaten & Diensten → Integratie toevoegen** en zoek op *BatteryLabs 3-Phase*.
+Go to **Settings → Devices & Services → Add Integration** and search for *BatteryLabs 3-Phase*.
 
-### Stap 4 — Configureren
+### Step 4 — Configure
 
-Vul het formulier in:
+Fill in the form:
 
-**P1-sensoren**
-Wijs per fase de import- en exportsensor aan. Dit zijn typisch sensoren van je DSMR of Slimme Meter integratie in kW.
+**P1 sensors**
+Assign the import and export sensor for each phase. These are typically sensors from your DSMR or Smart Meter integration in kW.
 
-**Omgeving**
-- *Prijssensor* — de sensor die de huidige energieprijs in €/kWh geeft
-- *Temperatuursensor* — een buitentemperatuur of ruimtetemperatuur sensor
+**Environment**
+- *Price sensor* — the sensor providing the current energy price in €/kWh
+- *Temperature sensor* — an outdoor or indoor temperature sensor
 
 **Hardware**
-- *Batterijmodel* — kies het Pylontech model dat het dichtst bij jouw situatie past
-- *Aantal modules* — hoeveel modules parallel (1–16)
-- *Omvormermodel* — kies het Victron MultiPlus-II model
+- *Battery model* — choose the Pylontech model closest to your situation
+- *Number of modules* — how many modules in parallel (1–16)
+- *Inverter model* — choose the Victron MultiPlus-II model
 
-**Instellingen**
-- *Minimale SoC* — de ondergrens voor ontladen (aanbevolen: 10%)
-- *Update interval* — hoe vaak de simulatie berekend wordt in seconden (standaard: 5s)
-- *Systeemkostprijs* — de aanschafwaarde van het systeem in euro, voor ROI-berekening
+**Settings**
+- *Minimum SoC* — the lower bound for discharging (recommended: 10%)
+- *Update interval* — how often the simulation is calculated, in seconds (default: 5s)
+- *System cost* — the purchase value of the system in euros, for ROI calculation
 
-**Smart Pro (optioneel)**
-- *Zonneplan sensor* — de sensor met het `forecast` attribuut voor uurprijzen
-- *PV aanwezig* — schakel in als je zonnepanelen hebt
-- *Forecast.solar sensor* — de sensor met de verwachte dagproductie in kWh
+**Smart Pro (optional)**
+- *Zonneplan sensor* — the sensor with the `forecast` attribute for hourly prices
+- *PV present* — enable if you have solar panels
+- *Forecast.solar sensor* — the sensor with the expected daily production in kWh
 
 ---
 
-## Sensoren & entiteiten
+## Sensors & entities
 
-Na installatie verschijnen alle entiteiten onder één apparaat: **BatteryLabs Systeem**.
+After installation, all entities appear under one device: **BatteryLabs Systeem**.
 
-### Batterij
-| Sensor | Omschrijving |
+### Battery
+| Sensor | Description |
 |---|---|
-| SoC | Laadtoestand in % — met attributen over capaciteit en temperatuurcorrectie |
-| State of Health | Batterijgezondheid in % — daalt langzaam naarmate cycli worden gemaakt |
-| Batterij Cycli | Aantal equivalente volledige laadcycli |
-| Batterij Temperatuur | Gesimuleerde celtemperatuur |
-| Tijd tot Leeg | Bij huidige ontlaadsnelheid: hoelang gaat de lading mee |
-| Tijd tot Vol | Bij huidige laadsnelheid: hoelang duurt volladen |
-| DC Spanning | Realistische LFP-spanning gebaseerd op actuele SoC |
-| DC Stroom | Actuele laad- of ontlaadstroom |
-| Round Trip Efficiency | Werkelijk gemeten efficiëntie over alle cycli |
-| Health Check | Tekstuele statusmelding van het BMS |
+| SoC | State of charge in % — with attributes about capacity and temperature correction |
+| State of Health | Battery health in % — declines slowly as cycles accumulate |
+| Batterij Cycli | Number of equivalent full charge cycles |
+| Batterij Temperatuur | Simulated cell temperature |
+| Tijd tot Leeg | At the current discharge rate: how long the charge will last |
+| Tijd tot Vol | At the current charge rate: how long a full charge takes |
+| DC Spanning | Realistic LFP voltage based on current SoC |
+| DC Stroom | Current charge or discharge current |
+| Round Trip Efficiency | Actually measured efficiency across all cycles |
+| Health Check | Textual status message from the BMS |
 
-### Vermogen & energie
-| Sensor | Omschrijving |
+### Power & energy
+| Sensor | Description |
 |---|---|
-| Batterij Vermogen Totaal | Totaal batterijvermogen in W (positief = laden) |
-| Inverter L1/L2/L3 Vermogen | Vermogen per fase |
-| P1 Werkelijk Totaal | Actueel netverbruik vóór batterijcorrectie |
-| Netto P1 Totaal/L1/L2/L3 (Sim) | Gesimuleerd netverbruik mét batterij |
-| Zon naar Batterij | Hoeveel PV-overschot de batterij ingaat |
-| Zon naar Net | Hoeveel PV-overschot wordt teruggeleverd |
-| Batterij Geladen/Ontladen Totaal | Energietellers in kWh |
+| Batterij Vermogen Totaal | Total battery power in W (positive = charging) |
+| Inverter L1/L2/L3 Vermogen | Power per phase |
+| P1 Werkelijk Totaal | Current grid usage before battery correction |
+| Netto P1 Totaal/L1/L2/L3 (Sim) | Simulated grid usage with battery |
+| Zon naar Batterij | How much PV surplus goes into the battery |
+| Zon naar Net | How much PV surplus is fed back to the grid |
+| Batterij Geladen/Ontladen Totaal | Energy counters in kWh |
 
-### Financiën
-| Sensor | Omschrijving |
+### Finance
+| Sensor | Description |
 |---|---|
-| Besparing Totaal | Totale besparing in € — met break-even voortgang als attribuut |
-| ROI Percentage | Terugverdienpercentage op basis van systeemkostprijs |
-| Verwachte Besparing 24h | Geschatte besparing van het huidige Smart Pro plan |
+| Besparing Totaal | Total savings in € — with break-even progress as an attribute |
+| ROI Percentage | Payback percentage based on system cost |
+| Verwachte Besparing 24h | Estimated savings from the current Smart Pro plan |
 
 ### Smart Pro
-| Sensor | Omschrijving |
+| Sensor | Description |
 |---|---|
-| Plan Actie Huidig Uur | Wat de optimizer nu doet en waarom (incl. prijs als attribuut) |
-| Plan SoC Doel | De doellading voor dit uur |
-| Volgende Actie | Wat er in het volgende uur gepland staat |
-| PV Verwacht Vandaag | Totale PV-productie verwacht vandaag in kWh |
-| SoH Degradatie Rate | Actuele degradatiesnelheid in % per maand |
-| Leerprofiel Voortgang | 0–100% voortgang van het leerproces |
+| Plan Actie Huidig Uur | What the optimizer is doing right now and why (incl. price as attribute) |
+| Plan SoC Doel | The target charge level for this hour |
+| Volgende Actie | What's planned for the next hour |
+| PV Verwacht Vandaag | Total PV production expected today in kWh |
+| SoH Degradatie Rate | Current degradation rate in % per month |
+| Leerprofiel Voortgang | 0–100% progress of the learning process |
 
-### Statussen & bediening
-| Entiteit | Omschrijving |
+### Status & control
+| Entity | Description |
 |---|---|
-| Systeem Status | Laden / Ontladen / Standby |
-| Inverter L1/L2/L3 Status | Status per fase |
-| BatteryLabs Strategie | Dropdown om de modus te kiezen |
-| Reset Leerprofiel | Knop om het leerproces opnieuw te starten |
+| Systeem Status | Charging / Discharging / Standby |
+| Inverter L1/L2/L3 Status | Status per phase |
+| BatteryLabs Strategie | Dropdown to select the mode |
+| Reset Leerprofiel | Button to restart the learning process |
 
 ---
 
-## Het leerproces begrijpen
+## Understanding the learning process
 
-De *Leerprofiel Voortgang* sensor is jouw venster op hoe slim de integratie al is.
+The *Learning Profile Progress* sensor is your window into how smart the integration has become.
 
 ```
 0% ──────── 50% ─────────────── 100%
-  Leren      Actief (beperkt)    Actief (betrouwbaar)
-  ~2 weken   2–4 weken           4+ weken
+  Learning   Active (limited)    Active (reliable)
+  ~2 weeks   2–4 weeks           4+ weeks
 ```
 
-Tijdens het leren draait de integratie automatisch in Smart Dynamic modus — je mist dus niets. Zodra 50% bereikt is (alle 168 dag×uur-combinaties minimaal 2 weken gezien), activeert Smart Pro zich. Na 4 weken is het profiel betrouwbaar genoeg voor optimale planning.
+While learning, the integration automatically runs in Smart Dynamic mode — so you don't miss out on anything. Once 50% is reached (all 168 day×hour combinations seen for at least 2 weeks), Smart Pro activates. After 4 weeks the profile is reliable enough for optimal planning.
 
-**Wanneer resetten?**
-- Na een grote verandering in je dagelijkse routine
-- Na installatie van extra zonnepanelen of andere apparatuur
-- Als je van woning wisselt
+**When should you reset?**
+- After a major change to your daily routine
+- After installing extra solar panels or other equipment
+- If you move to a different home
 
-Gebruik de *Reset Leerprofiel* knop op het dashboard, of vink de resetoptie aan in de integratie-instellingen. Je besparing, cycli en SoH-data blijven altijd bewaard.
+Use the *Reset Learning Profile* button on the dashboard, or tick the reset option in the integration settings. Your savings, cycles, and SoH data are always preserved.
 
 ---
 
 ## Dashboard tips
 
-### Minimaal dashboard
-Voor een snel overzicht zijn deze vier sensoren het meest waardevol:
-1. **SoC** — als gauge card (0–100%)
-2. **Systeem Status** — als entity card
-3. **Plan Actie Huidig Uur** — als markdown card (inclusief attribuut `reden`)
-4. **Besparing Totaal** — als statistiek card
+### Minimal dashboard
+For a quick overview, these four sensors are the most valuable:
+1. **SoC** — as a gauge card (0–100%)
+2. **Systeem Status** — as an entity card
+3. **Plan Actie Huidig Uur** — as a markdown card (including the `reden`/reason attribute)
+4. **Besparing Totaal** — as a statistics card
 
-### Attributen gebruiken
-Veel sensoren hebben rijke attributen. In een *markdown card* kun je ze tonen:
+### Using attributes
+Many sensors have rich attributes. You can display them in a *markdown card*:
 
 ```yaml
 type: markdown
 content: >
-  **Waarom deze actie?**
+  **Why this action?**
   {{ state_attr('sensor.batterylabs_plan_actie_huidig_uur', 'reden') }}
 
-  **Prijs nu:** € {{ state_attr('sensor.batterylabs_plan_actie_huidig_uur', 'prijs_huidig_uur_eur') }}/kWh
-  **Duurste uur vandaag:** {{ state_attr('sensor.batterylabs_plan_actie_huidig_uur', 'duurste_uur_vandaag') }}
+  **Current price:** € {{ state_attr('sensor.batterylabs_plan_actie_huidig_uur', 'prijs_huidig_uur_eur') }}/kWh
+  **Most expensive hour today:** {{ state_attr('sensor.batterylabs_plan_actie_huidig_uur', 'duurste_uur_vandaag') }}
 ```
 
-### Automatisering op basis van de optimizer
-De *Plan Actie* sensor leent zich perfect voor automations:
+### Automations based on the optimizer
+The *Plan Action* sensor is perfect for automations:
 
 ```yaml
 automation:
-  - alias: "Melding bij negatieve energieprijs"
+  - alias: "Notify on negative energy price"
     trigger:
       - platform: state
         entity_id: sensor.batterylabs_plan_actie_huidig_uur
@@ -254,69 +254,69 @@ automation:
     action:
       - service: notify.mobile_app
         data:
-          message: "⚡ Negatieve stroomprijs! Batterij laadt nu gratis op."
+          message: "⚡ Negative electricity price! The battery is charging for free right now."
 ```
 
 ---
 
-## Veelgestelde vragen
+## Frequently asked questions
 
-**Heeft dit invloed op mijn echte installatie?**
-Nee. BatteryLabs is een pure simulatie — het leest alleen sensordata en schrijft naar Home Assistant entiteiten. Er wordt geen hardware aangestuurd.
+**Does this affect my real installation?**
+No. BatteryLabs is a pure simulation — it only reads sensor data and writes to Home Assistant entities. No hardware is controlled.
 
-**Ik heb geen Zonneplan contract. Werkt het dan ook?**
-Ja, volledig. Kies bij de installatie *Vast tarief* als contracttype en vul je kWh-prijs in. De Smart Pro optimizer gebruikt dan tijdsblokken (nacht/ochtendpiek/dag/avondpiek) in plaats van uurprijzen om te beslissen wanneer te laden en ontladen. Je profiteert volledig van het leerproces, de PV-forecast en alle sensoren. De tijdsblokken zijn ook configureerbaar als je thuis een ander dag-patroon hebt dan het standaard.
+**I don't have a Zonneplan contract. Does it still work?**
+Yes, fully. Choose *Fixed rate* as the contract type during installation and enter your kWh price. The Smart Pro optimizer then uses time blocks (night/morning peak/day/evening peak) instead of hourly prices to decide when to charge and discharge. You still fully benefit from the learning process, the PV forecast, and all sensors. The time blocks are also configurable if your household follows a different daily pattern than the default.
 
-**Wat is het verschil tussen dynamisch en vast contract bij Smart Pro?**
-Bij een dynamisch contract stuurt de optimizer op de werkelijke prijsverschillen per uur — tot 60–70% verschil tussen het goedkoopste en duurste uur. Bij een vast contract stuurt de optimizer op tijdspatroon: nacht en dal zijn "goedkoop", ochtend- en avondpiek zijn "duur". Het effect is hetzelfde: de batterij laadt wanneer het slim is en ontlaadt wanneer het nodig is. De besparing is iets kleiner omdat er geen echte prijsarbitrage is, maar het zelfverbruik en de vermeden netimport-besparing zijn identiek.
+**What's the difference between a dynamic and a fixed contract with Smart Pro?**
+With a dynamic contract, the optimizer steers on actual hourly price differences — up to a 60–70% difference between the cheapest and most expensive hour. With a fixed contract, the optimizer steers on time patterns: night and off-peak are "cheap," morning and evening peaks are "expensive." The effect is the same: the battery charges when it's smart to and discharges when needed. Savings are somewhat lower since there's no real price arbitrage, but the self-consumption and avoided-grid-import savings are identical.
 
-**Ik heb geen zonnepanelen. Heeft Smart Pro dan zin?**
-Absoluut. Zonder PV optimaliseert de integratie puur op basis van het verbruiksprofiel en de tariefverschillen. Op een dynamisch contract is er altijd een verschil van 30–60% tussen het goedkoopste en duurste uur van de dag.
+**I don't have solar panels. Does Smart Pro still make sense?**
+Absolutely. Without PV, the integration optimizes purely based on the consumption profile and tariff differences. On a dynamic contract there's always a 30–60% difference between the cheapest and most expensive hour of the day.
 
-**Hoe nauwkeurig is de besparing?**
-De besparing wordt berekend op basis van werkelijk vermeden netimport × actuele prijs op dat moment. Dit is een conservatieve, realistische berekening — geen marketingcijfers.
+**How accurate are the savings?**
+Savings are calculated based on actual avoided grid import × the actual price at that moment. This is a conservative, realistic calculation — not marketing numbers.
 
-**Kan ik meerdere instanties draaien?**
-Ja. Je kunt de integratie meerdere keren toevoegen voor verschillende systeemconfiguraties of om scenario's te vergelijken.
+**Can I run multiple instances?**
+Yes. You can add the integration multiple times for different system configurations or to compare scenarios.
 
-**Mijn P1-sensoren geven waarden in W, niet kW. Wat moet ik doen?**
-De integratie verwacht kW. Maak een `template sensor` in HA die de waarde door 1000 deelt, en wijs die aan in de configuratie.
+**My P1 sensors report values in W, not kW. What should I do?**
+The integration expects kW. Create a `template sensor` in HA that divides the value by 1000, and assign that in the configuration.
 
 ---
 
-## Technische details
+## Technical details
 
-### Bestanden
-| Bestand | Functie |
+### Files
+| File | Function |
 |---|---|
-| `hardware_profiles.py` | Datasheet-profielen Pylontech & Victron |
-| `sensor.py` | Coordinator, simulatielogica, alle sensoren |
-| `config_flow.py` | Configuratieformulier (aanmaken & bewerken) |
-| `select.py` | Strategiedropdown |
-| `button.py` | Reset leerprofiel knop |
-| `const.py` | Alle constanten en drempelwaarden |
+| `hardware_profiles.py` | Datasheet profiles for Pylontech & Victron |
+| `sensor.py` | Coordinator, simulation logic, all sensors |
+| `config_flow.py` | Configuration form (setup & edit) |
+| `select.py` | Strategy dropdown |
+| `button.py` | Reset learning profile button |
+| `const.py` | All constants and threshold values |
 
-### Opgeslagen bestanden
-De integratie schrijft twee bestanden naar je HA config-map:
+### Stored files
+The integration writes two files to your HA config directory:
 
-- `sim_battery_{id}.json` — SoC, SoH, besparing, energietellers (elke 10 minuten)
-- `sim_battery_{id}_profile.json` — verbruiksprofiel (elke 30 minuten)
+- `sim_battery_{id}.json` — SoC, SoH, savings, energy counters (every 10 minutes)
+- `sim_battery_{id}_profile.json` — consumption profile (every 30 minutes)
 
-### Versiehistorie
-| Versie | Highlights |
+### Version history
+| Version | Highlights |
 |---|---|
-| 4.0.0 | Smart Pro optimizer, leerproces, hardware profielen, attribuutlaag |
-| 3.0.0 | Bugfixes, async I/O, per-fase sim_p sensoren, cleanup bij unload |
-| 2.0.0 | 3-fase ondersteuning, financiële sensoren, thermisch model |
+| 4.0.0 | Smart Pro optimizer, learning process, hardware profiles, attribute layer |
+| 3.0.0 | Bug fixes, async I/O, per-phase sim_p sensors, cleanup on unload |
+| 2.0.0 | 3-phase support, financial sensors, thermal model |
 
 ---
 
-## Licentie & credits
+## License & credits
 
-Ontwikkeld door **Jordy Kleian**.
+Developed by **Jordy Kleian**.
 
-Hardwareprofielen gebaseerd op officiële datasheets van [Victron Energy](https://www.victronenergy.com) en [Pylontech](https://en.pylontech.com.cn). BatteryLabs 3-Phase is niet gelieerd aan of goedgekeurd door Victron Energy of Pylontech.
+Hardware profiles based on official datasheets from [Victron Energy](https://www.victronenergy.com) and [Pylontech](https://en.pylontech.com.cn). BatteryLabs 3-Phase is not affiliated with or endorsed by Victron Energy or Pylontech.
 
 ---
 
-*BatteryLabs 3-Phase — omdat slimme energie begint met slim inzicht.*
+*BatteryLabs 3-Phase — because smart energy starts with smart insight.*
