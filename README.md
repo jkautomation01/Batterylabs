@@ -21,7 +21,7 @@ BatteryLabs 3-Phase does not talk to physical battery hardware — it **simulate
 - 📊 **Self-learning consumption profile** (7×24 EMA matrix) that improves planning accuracy over weeks
 - ☀️ **Real hourly solar forecasts** — pulls genuine hour-by-hour PV predictions from the `forecast.solar` service when available, falling back to a Gaussian-curve estimate otherwise
 - 🎯 **Forecast self-correction** — continuously compares its own PV and consumption predictions against what actually happened, and learns an hour-by-hour correction factor that keeps improving accuracy over time
-- 🙈 **Minimal by default** — only the handful of sensors you actually need to see are visible out of the box; every diagnostic/advanced sensor still exists and can be switched on individually via Settings → Entities
+- 🧭 **Commercial-style sensor set** — only what a sealed battery/inverter product (Tesla Powerwall, Sigenergy, AlphaESS-style) would show is created by default: SoC, power, status, State of Health, time-to-full/empty, savings and ROI. Every diagnostic/simulator-only sensor (DC values, per-phase inverter detail, the advisor/score engine, forecast-learning accuracy, etc.) is removed entirely, not just hidden
 - 🛡️ **Fail-safe by design** — if the optimizer errors out for any reason, the system automatically falls back to a proven heuristic instead of stalling
 
 ## Requirements
@@ -61,44 +61,29 @@ All settings can be changed afterwards via **Settings → Devices & Services →
 
 ## Entities & Sensors
 
+Only what a sealed commercial battery/inverter product would expose is created by default:
+
 | Name | Platform | Unit | Description & Interpretation |
 |---|---|---|---|
 | BatteryLabs SoC | sensor | % | Simulated state of charge. Higher = more stored energy available. |
 | BatteryLabs Batterij Vermogen Totaal | sensor | W | Total battery power; positive = charging, negative = discharging. |
-| BatteryLabs Batterij DC Stroom / Spanning | sensor | A / V | Simulated DC current and voltage based on the SoC-voltage curve. |
 | BatteryLabs State of Health | sensor | % | Simulated battery degradation. 100% = new; below 80% triggers a health warning. |
-| BatteryLabs Batterij Cycli | sensor | count | Cumulative equivalent full cycles since installation. |
-| BatteryLabs Health Check | sensor | text | Overall health status (`Healthy`, `Warning: Overheating`, `Caution: Low Battery`, etc.). Anything other than `Healthy` deserves attention. |
-| BatteryLabs Round Trip Efficiency | sensor | % | Lifetime charge/discharge efficiency. Lower than ~90% may indicate a modeling or configuration issue. |
-| BatteryLabs Batterij Temperatuur | sensor | °C | Simulated cell temperature. Outside 15–35°C reduces available capacity and power. |
-| BatteryLabs Inverter L1/L2/L3 Vermogen | sensor | W | Per-phase inverter power; sign convention same as total power. |
-| BatteryLabs Actie Nu / Actie Reden | sensor | text | Human-readable explanation of what the system is doing right now and why — the fastest way to understand current behavior. |
-| BatteryLabs Plan Actie Huidig Uur | sensor | text | What the 24h optimizer plan prescribes for the current hour. |
-| BatteryLabs Plan SoC Doel | sensor | % | Target SoC for the current hour according to the plan. |
-| BatteryLabs DP Verwachte Kosten | sensor | € | Expected net cost for the remaining planning horizon, per the DP optimizer. Negative values mean projected net earnings. |
-| BatteryLabs Dagspread Prijs | sensor | € | Difference between today's highest and lowest price. Below the configured threshold, the optimizer intentionally holds rather than trades. |
-| BatteryLabs Arbitrage Diepte | sensor | % | How deep (in SoC%) the optimizer is willing to cycle per hour, scaled with the daily spread. |
-| BatteryLabs Huisreserve SoC | sensor | % | Dynamic floor protecting household consumption from being sold off; never lower than your configured minimum SoC. |
-| BatteryLabs Advies Systeem Samenvatting | sensor | text | One-line summary of the single most important improvement opportunity for your system. |
-| BatteryLabs Advies Financieel/Omvormer/Capaciteit/Levensduur v2 | sensor | text | Detailed advisor verdicts per dimension, with a numeric score and hardware alternative available as attributes. |
-| BatteryLabs Leerprofiel Voortgang | sensor | % | How complete the learned consumption profile is. 100% = fully reliable, used at full weight in planning. |
-| BatteryLabs Systeem Score | sensor | 0–100 | Composite health score across six weighted categories. Below 50 suggests attention is warranted. |
-| BatteryLabs Systeem Status | sensor | text | Overall operating state (`Standby`, `Laden`, `Ontladen`), with numerous diagnostic attributes. |
+| BatteryLabs Tijd tot Leeg | sensor | text | At the current discharge rate, how long until empty. |
+| BatteryLabs Tijd tot Vol | sensor | text | At the current charge rate, how long until full. |
+| BatteryLabs Besparing Totaal | sensor | € | Total savings — with break-even progress as an attribute. |
+| BatteryLabs ROI Percentage | sensor | % | Payback percentage based on system cost. |
+| BatteryLabs Systeem Status | sensor | text | Overall operating state (`Standby`, `Laden`, `Ontladen`). |
+| BatteryLabs Strategie | select | — | Mode control: `Automatisch` or `Noodlading (Volladen)`. |
 
 Every sensor exposes additional `attributes` with the underlying calculation detail — click any entity to see exactly why it reports what it does.
 
-Most of these sensors are **hidden by default** — only a handful of core sensors (SoC, total battery power, State of Health, total savings, ROI, system status, current action, current-hour plan action, and learning-profile progress) are visible out of the box, to keep the entity list manageable. Every other sensor listed above still exists and keeps updating in the background; enable any of them individually via **Settings → Devices & Services → Entities**, search for "BatteryLabs", and toggle the ones you want to see.
+A handful of additional sensors stay in the integration **hidden** (not removed) purely because the included Lovelace cards (see below) read them directly — `Actie Nu`, `Actie Reden`, `Plan Actie Huidig Uur`, `Plan SoC Doel`, `Volgende Actie`, `Verwachte Besparing 24h`, `PV Verwacht Vandaag`, `Restcapaciteit`, `Huisreserve SoC` — plus a `Reset Leerprofiel` button for the learning process. They keep updating in the background and can be made visible via **Settings → Devices & Services → Entities** → search "BatteryLabs" → unhide, if you want to use them outside those cards.
+
+Everything else from earlier versions (DC current/voltage, per-phase inverter power/temperature/status, cycle count, round-trip efficiency, health-check text, the advisor/score engine, forecast-learning accuracy, day-spread/arbitrage/DP-cost diagnostics, learning-profile progress) has been **removed entirely** as of 5.0.0 — the underlying calculations still run (they feed the plan/advisor logic internally), there just isn't an entity exposing them anymore.
 
 ## Options / Settings
 
-Peak shaving stays adjustable live via number sliders, without restarting Home Assistant:
-
-| Setting | Range | Default | Effect |
-|---|---|---|---|
-| Peak Shaving Drempel | 500–7000 W | 2200 W | Per-phase import power above which the battery discharges to shave the peak. |
-| Peak Shaving Min SoC | 5–50% | 15% | Floor below which peak shaving stops and which now also acts as a hard floor for the household reserve. |
-
-There is no manual cycle-budget dial anymore — the optimizer weighs every discharge decision against the real economic cost of battery wear instead (see Key Features above). Hardware model, price/feed-in settings and the solar forecast sensor are configured through the **Configure** menu described above.
+Peak shaving (import threshold and minimum SoC floor) now uses fixed internal defaults (2200 W/phase, 15%) — the adjustable `number` sliders that used to control these were removed along with the rest of the diagnostic entities. Hardware model, price/feed-in settings and the solar forecast sensor are configured through the **Configure** menu described above. There is no manual cycle-budget dial — the optimizer weighs every discharge decision against the real economic cost of battery wear instead (see Key Features above).
 
 ## Debugging
 

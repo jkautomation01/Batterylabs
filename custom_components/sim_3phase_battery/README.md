@@ -11,7 +11,7 @@
 
 BatteryLabs simulates a **physical home battery system made up of Victron MultiPlus-II inverters and Pylontech lithium batteries** — based on real datasheet values. The integration reads your P1 meter, factors in current and forecast energy prices, and calculates in real time what a battery would do if one were installed.
 
-The result: more than **30 sensors** in your Home Assistant that tell you exactly how your system is performing, how much you're saving, how healthy your (virtual) battery is — and what the smartest action is for the coming hour.
+The result: a focused set of entities in your Home Assistant — modeled after what a real commercial battery/inverter app would show — that tell you exactly how your system is performing, how much you're saving, and what it's doing right now. The full simulation (hardware physics, price optimization, learning) keeps running underneath regardless of how many entities are exposed.
 
 **No battery required to get started.** Simulate first, invest later based on real data.
 
@@ -138,67 +138,55 @@ Assign the import and export sensor for each phase (typically from your DSMR or 
 
 ## Sensors & entities
 
-After installation, all entities appear under one device: **BatteryLabs Systeem**.
+After installation, all entities appear under one device: **BatteryLabs Systeem**. Only what a
+sealed commercial battery/inverter product (Tesla Powerwall, Sigenergy, AlphaESS-style) would
+expose is visible by default:
 
-### Battery
-| Sensor | Description |
-|---|---|
-| SoC | State of charge in % — with attributes about capacity and temperature correction |
-| State of Health | Battery health in % — declines slowly as cycles accumulate |
-| Batterij Cycli | Number of equivalent full charge cycles |
-| Batterij Temperatuur | Simulated cell temperature |
-| Tijd tot Leeg | At the current discharge rate: how long the charge will last |
-| Tijd tot Vol | At the current charge rate: how long a full charge takes |
-| DC Spanning | Realistic LFP voltage based on current SoC |
-| DC Stroom | Current charge or discharge current |
-| Round Trip Efficiency | Actually measured efficiency across all cycles |
-| Health Check | Textual status message from the BMS |
-
-### Power & energy
-| Sensor | Description |
-|---|---|
-| Batterij Vermogen Totaal | Total battery power in W (positive = charging) |
-| Inverter L1/L2/L3 Vermogen | Power per phase |
-| P1 Werkelijk Totaal | Current grid usage before battery correction |
-| Netto P1 Totaal/L1/L2/L3 (Sim) | Simulated grid usage with battery |
-| Zon naar Batterij | How much PV surplus goes into the battery |
-| Zon naar Net | How much PV surplus is fed back to the grid |
-| Batterij Geladen/Ontladen Totaal | Energy counters in kWh |
-
-### Finance
-| Sensor | Description |
-|---|---|
-| Besparing Totaal | Total savings in € — with break-even progress as an attribute |
-| ROI Percentage | Payback percentage based on system cost |
-| Verwachte Besparing 24h | Estimated savings from the current optimizer plan |
-
-### Optimizer & planning
-| Sensor | Description |
-|---|---|
-| Plan Actie Huidig Uur | What the optimizer is doing right now and why (incl. price as attribute) |
-| Plan SoC Doel | The target charge level for this hour |
-| Volgende Actie | What's planned for the next hour |
-| DP Verwachte Kosten | Expected net cost for the remaining planning horizon; negative = projected net earnings |
-| PV Verwacht Vandaag | Total PV production expected today in kWh — from the real forecast.solar hourly data when configured, otherwise a Gaussian-curve estimate |
-| Forecast Leren Samenvatting / Nauwkeurigheid | How well PV and consumption predictions matched reality, and the self-correction learned from it |
-| SoH Degradatie Rate | Current degradation rate in % per month |
-| Leerprofiel Voortgang | 0–100% progress of the learning process |
-
-Most of the sensors above are **hidden by default** to keep the entity list manageable — only the handful of core sensors (SoC, total battery power, State of Health, total savings, ROI, system status, current action, current-hour plan action, and learning-profile progress) show up out of the box. Every other sensor still exists and keeps updating; enable any of them via **Settings → Devices & Services → Entities**, search for "BatteryLabs", and toggle the ones you want.
-
-### Status & control
+### Visible by default
 | Entity | Description |
 |---|---|
+| SoC | State of charge in % — with attributes about capacity and temperature correction |
+| Batterij Vermogen Totaal | Total battery power in W (positive = charging) |
+| State of Health | Battery health in % — declines slowly as cycles accumulate |
+| Tijd tot Leeg | At the current discharge rate: how long the charge will last |
+| Tijd tot Vol | At the current charge rate: how long a full charge takes |
+| Besparing Totaal | Total savings in € — with break-even progress as an attribute |
+| ROI Percentage | Payback percentage based on system cost |
 | Systeem Status | Charging / Discharging / Standby |
-| Inverter L1/L2/L3 Status | Status per phase |
-| BatteryLabs Strategie | Dropdown to select the mode |
-| Reset Leerprofiel | Button to restart the learning process |
+| BatteryLabs Strategie (select) | Mode control: Automatisch / Noodlading (Volladen) |
+
+### Hidden, but still live (used by the dashboard cards)
+These exist purely to back the included Lovelace cards below — they keep updating in the
+background and can be unhidden via **Settings → Devices & Services → Entities** → search
+"BatteryLabs" if you want them for your own dashboards or automations:
+
+| Entity | Description |
+|---|---|
+| Actie Nu / Actie Reden | What the system is doing right now and why |
+| Plan Actie Huidig Uur | What the optimizer plans for the current hour (incl. price/forecast attributes) |
+| Plan SoC Doel | The target charge level for this hour |
+| Volgende Actie | What's planned for the next hour |
+| Verwachte Besparing 24h | Estimated savings from the current optimizer plan |
+| PV Verwacht Vandaag | Total PV production expected today in kWh |
+| Restcapaciteit | Remaining usable energy above your minimum SoC |
+| Huisreserve SoC | Dynamic floor protecting household consumption from being sold off |
+| Reset Leerprofiel (button) | Restarts the learning process |
+
+### Removed entirely as of 5.0.0
+Everything else from earlier versions — DC current/voltage, per-phase inverter power/temperature/
+status, cycle count, round-trip efficiency, health-check text, P1/netto-P1 sim values, solar-to-
+battery/grid split, the advisor/score engine (`score_*`/`advies_*`, both v1 and v2), forecast-
+learning accuracy/summary, SoH degradation rate, day-spread/arbitrage/DP-cost diagnostics, and
+learning-profile progress — is **gone**, not just hidden. The underlying calculations that feed
+the plan and advisor logic keep running internally; there's just no entity exposing them anymore.
 
 ---
 
 ## Understanding the learning process
 
-The *Learning Profile Progress* sensor is your window into how smart the integration has become.
+There's no longer a dedicated "Learning Profile Progress" entity (removed in 5.0.0, along with the
+other diagnostic sensors) — the learning still happens the same way internally, it's just not
+exposed as a number to watch. Roughly:
 
 ```
 0% ──────── 50% ─────────────── 100%
@@ -291,7 +279,7 @@ The integration expects kW. Create a `template sensor` in HA that divides the va
 | `advisor.py` | Hardware-sizing advisor logic |
 | `config_flow.py` | Configuration form (setup & edit) |
 | `select.py` | Mode dropdown (Automatisch / Noodlading) |
-| `number.py` | Peak-shaving tuning sliders |
+| `number.py` | Unused since 5.0.0 — peak shaving now uses fixed internal defaults instead of adjustable sliders |
 | `button.py` | Reset learning profile button |
 | `const.py` | All constants and threshold values |
 
@@ -304,7 +292,7 @@ The integration writes two files to your HA config directory:
 ### Version history
 | Version | Highlights |
 |---|---|
-| 5.0.0 | Simplified to two modes (Automatisch/Noodlading), economic wear-cost optimizer (replacing the manual cycle budget), real hourly forecast.solar PV data with self-correcting forecast learning, most sensors hidden by default (enable via Settings → Entities) |
+| 5.0.0 | Simplified to two modes (Automatisch/Noodlading), economic wear-cost optimizer (replacing the manual cycle budget), real hourly forecast.solar PV data with self-correcting forecast learning, entity set trimmed to a generic-commercial-system level (most diagnostic sensors removed entirely; a handful stay hidden to back the included dashboard cards) |
 | 4.0.0 | Smart Pro optimizer, learning process, hardware profiles, attribute layer |
 | 3.0.0 | Bug fixes, async I/O, per-phase sim_p sensors, cleanup on unload |
 | 2.0.0 | 3-phase support, financial sensors, thermal model |
