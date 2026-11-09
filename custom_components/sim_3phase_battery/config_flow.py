@@ -1,32 +1,27 @@
 """
 Config flow voor BatteryLabs 3-Phase.
 
-Setup flow -- wizard, 6 stappen:
-  user       -> P1 sensoren + temperatuursensor
-  hardware   -> Batterij + omvormer + basisinstellingen
-  contract   -> Contracttype
-  pricing    -> Prijs (dynamisch of vast, afhankelijk van contract)
-  feed_in    -> Terugleveringstarief (vast of sensor)
-  feed_in_detail -> Details afhankelijk van gekozen modus
-  pv_choice  -> PV aanwezig?
-  pv_sensor  -> Forecast sensor (alleen als pv_present=True)
+Setup flow -- wizard, 4 stappen:
+  user      -> P1 sensoren + temperatuursensor (optioneel)
+  hardware  -> Batterij + omvormer + basisinstellingen
+  energie   -> Prijssensor (optioneel) + vast tarief + terugleveringstarief
+  zon       -> PV-forecast sensor (optioneel)
+
+Dynamisch vs. vast tarief is geen keuze meer -- als er een prijssensor is
+gekoppeld en die een forecast-attribuut heeft, wordt automatisch dynamisch
+geoptimaliseerd; anders (of zodra de sensor geen geldige waarde geeft) valt
+het systeem vanzelf terug op het ingevulde vaste tarief.
 
 Options flow -- menu met losse secties:
   Kies welk onderdeel je wilt aanpassen, sla direct op.
   Extra menuoptie voor reset leerprofiel met bevestiging.
 """
-import json as _json
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
-from .const import (
-    DOMAIN,
-    CONTRACT_DYNAMIC, CONTRACT_FIXED, CONTRACT_TYPES,
-    EV_MIN_SOC_DEFAULT,
-    FEED_IN_MODE_FIXED, FEED_IN_MODE_SENSOR, FEED_IN_TARIFF_DEFAULT_EUR,
-)
+from .const import DOMAIN, FEED_IN_TARIFF_DEFAULT_EUR
 from .hardware_profiles import PYLONTECH_PROFILES, VICTRON_PROFILES
 
 
@@ -35,7 +30,7 @@ from .hardware_profiles import PYLONTECH_PROFILES, VICTRON_PROFILES
 # ---------------------------------------------------------------------------
 
 def _schema_sensors(defaults: dict) -> vol.Schema:
-    """P1 sensoren en temperatuursensor."""
+    """P1 sensoren (verplicht) en temperatuursensor (optioneel)."""
     return vol.Schema({
         vol.Required("l1_import_kw", default=defaults.get("l1_import_kw")): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")),
@@ -49,7 +44,7 @@ def _schema_sensors(defaults: dict) -> vol.Schema:
             selector.EntitySelectorConfig(domain="sensor")),
         vol.Required("l3_export_kw", default=defaults.get("l3_export_kw")): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")),
-        vol.Required("temp_sensor", default=defaults.get("temp_sensor")): selector.EntitySelector(
+        vol.Optional("temp_sensor", default=defaults.get("temp_sensor", "")): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")),
     })
 
@@ -75,93 +70,32 @@ def _schema_hardware(defaults: dict) -> vol.Schema:
         vol.Required("min_soc", default=float(defaults.get("min_soc", 10.0))): selector.NumberSelector(
             selector.NumberSelectorConfig(min=5, max=50, step=1, unit_of_measurement="%", mode=selector.NumberSelectorMode.SLIDER)
         ),
-        vol.Required("update_interval", default=float(defaults.get("update_interval", 5))): selector.NumberSelector(
-            selector.NumberSelectorConfig(min=5, max=60, step=5, unit_of_measurement="s", mode=selector.NumberSelectorMode.SLIDER)
-        ),
-        vol.Required("system_cost_euro", default=float(defaults.get("system_cost_euro", 15000))): selector.NumberSelector(
+        vol.Optional("system_cost_euro", default=float(defaults.get("system_cost_euro", 0.0))): selector.NumberSelector(
             selector.NumberSelectorConfig(min=0, max=100000, step=500, unit_of_measurement="€", mode=selector.NumberSelectorMode.BOX)
         ),
     })
 
 
-def _schema_contract(defaults: dict) -> vol.Schema:
-    """Contracttype kiezen."""
+def _schema_energie(defaults: dict) -> vol.Schema:
+    """Prijssensor (optioneel) + vast tarief + terugleveringstarief."""
+    existing = defaults.get("zonneplan_sensor") or None
     return vol.Schema({
-        vol.Required("contract_type", default=defaults.get("contract_type", CONTRACT_DYNAMIC)): selector.SelectSelector(
-            selector.SelectSelectorConfig(
-                options=CONTRACT_TYPES,
-                mode=selector.SelectSelectorMode.LIST,
-            )
-        ),
-    })
-
-
-def _schema_pricing_dynamic(defaults: dict) -> vol.Schema:
-    """Dynamisch contract: prijssensor + Zonneplan."""
-    return vol.Schema({
-        vol.Required("price_sensor", default=defaults.get("price_sensor", "")): selector.EntitySelector(
+        vol.Optional("zonneplan_sensor", default=existing): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")),
-        vol.Optional("zonneplan_sensor", default=defaults.get("zonneplan_sensor", "")): selector.EntitySelector(
-            selector.EntitySelectorConfig(domain="sensor")),
-    })
-
-
-def _schema_pricing_fixed(defaults: dict) -> vol.Schema:
-    """Vast contract: vaste prijs + optionele sensor + tijdsblokken."""
-    return vol.Schema({
         vol.Required("fixed_price_eur", default=float(defaults.get("fixed_price_eur", 0.25))): selector.NumberSelector(
             selector.NumberSelectorConfig(min=0.0, max=2.0, step=0.001, unit_of_measurement="€/kWh", mode=selector.NumberSelectorMode.BOX)
         ),
-        vol.Optional("price_sensor", default=defaults.get("price_sensor", "")): selector.EntitySelector(
-            selector.EntitySelectorConfig(domain="sensor")),
-        vol.Optional("fixed_time_blocks", default=defaults.get("fixed_time_blocks", "")): selector.TextSelector(
-            selector.TextSelectorConfig(multiline=False)
-        ),
-    })
-
-
-def _schema_feed_in_mode(defaults: dict) -> vol.Schema:
-    """Kies: vast getal of gekoppeld aan een sensor."""
-    return vol.Schema({
-        vol.Required("feed_in_mode", default=defaults.get("feed_in_mode", FEED_IN_MODE_FIXED)): selector.SelectSelector(
-            selector.SelectSelectorConfig(
-                options=[FEED_IN_MODE_FIXED, FEED_IN_MODE_SENSOR],
-                mode=selector.SelectSelectorMode.LIST,
-            )
-        ),
-    })
-
-
-def _schema_feed_in_fixed(defaults: dict) -> vol.Schema:
-    """Vast terugleveringstarief in euro per kWh."""
-    return vol.Schema({
         vol.Required("feed_in_tariff_eur", default=float(defaults.get("feed_in_tariff_eur", FEED_IN_TARIFF_DEFAULT_EUR))): selector.NumberSelector(
             selector.NumberSelectorConfig(min=0.0, max=1.0, step=0.001, unit_of_measurement="€/kWh", mode=selector.NumberSelectorMode.BOX)
         ),
     })
 
 
-def _schema_feed_in_sensor(defaults: dict) -> vol.Schema:
-    """Terugleveringstarief gekoppeld aan een sensor."""
-    existing = defaults.get("feed_in_tariff_sensor") or None
-    return vol.Schema({
-        vol.Required("feed_in_tariff_sensor", default=existing): selector.EntitySelector(
-            selector.EntitySelectorConfig(domain="sensor")),
-    })
-
-
-def _schema_pv_choice(defaults: dict) -> vol.Schema:
-    """PV aanwezig?"""
-    return vol.Schema({
-        vol.Required("pv_present", default=bool(defaults.get("pv_present", False))): selector.BooleanSelector(),
-    })
-
-
-def _schema_pv_sensor(defaults: dict) -> vol.Schema:
-    """Forecast.solar sensor."""
+def _schema_zon(defaults: dict) -> vol.Schema:
+    """PV-forecast sensor (optioneel)."""
     existing = defaults.get("solar_forecast_sensor") or None
     return vol.Schema({
-        vol.Required("solar_forecast_sensor", default=existing): selector.EntitySelector(
+        vol.Optional("solar_forecast_sensor", default=existing): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")),
     })
 
@@ -173,17 +107,6 @@ def _schema_reset(defaults: dict) -> vol.Schema:
     })
 
 
-def _schema_ev(defaults: dict) -> vol.Schema:
-    """EV-laadstatus sensor en reserve SoC."""
-    return vol.Schema({
-        vol.Optional("ev_charging_sensor", default=defaults.get("ev_charging_sensor", "")): selector.EntitySelector(
-            selector.EntitySelectorConfig(domain="binary_sensor")),
-        vol.Optional("ev_min_soc", default=float(defaults.get("ev_min_soc", EV_MIN_SOC_DEFAULT))): selector.NumberSelector(
-            selector.NumberSelectorConfig(min=10, max=80, step=5, unit_of_measurement="%", mode=selector.NumberSelectorMode.SLIDER)
-        ),
-    })
-
-
 # ---------------------------------------------------------------------------
 # Invoer verwerking
 # ---------------------------------------------------------------------------
@@ -192,42 +115,23 @@ def _process_collected(data: dict) -> dict:
     """
     Verwerkt het gecombineerde data-dict na alle stappen.
     NumberSelector levert float -- integers worden expliciet omgezet.
+    pv_present wordt afgeleid uit de PV-forecast sensor in plaats van een
+    losse aan/uit-vraag: leeg = geen zonnepanelen.
     """
     processed = data.copy()
     processed["battery_modules"] = int(float(data.get("battery_modules", 1)))
-    processed["update_interval"] = int(float(data.get("update_interval", 5)))
     processed["min_soc"] = float(data.get("min_soc", 10.0))
-    processed["system_cost_euro"] = float(data.get("system_cost_euro", 15000.0))
+    processed["system_cost_euro"] = float(data.get("system_cost_euro", 0.0))
     processed["fixed_price_eur"] = float(data.get("fixed_price_eur", 0.25))
-    processed["feed_in_mode"] = data.get("feed_in_mode", FEED_IN_MODE_FIXED)
     processed["feed_in_tariff_eur"] = float(data.get("feed_in_tariff_eur", FEED_IN_TARIFF_DEFAULT_EUR))
 
-    # Tijdsblokken valideren
-    raw_blocks = str(data.get("fixed_time_blocks", "")).strip()
-    if raw_blocks:
-        try:
-            blocks = _json.loads(raw_blocks)
-            if not isinstance(blocks, list):
-                raise ValueError
-            for b in blocks:
-                if len(b) != 3 or not isinstance(b[2], str):
-                    raise ValueError
-            processed["fixed_time_blocks"] = blocks
-        except Exception:
-            processed["fixed_time_blocks"] = ""
-    else:
-        processed["fixed_time_blocks"] = ""
-
-    # Zorg dat alle optionele velden altijd aanwezig zijn
-    processed["ev_min_soc"] = float(data.get("ev_min_soc", EV_MIN_SOC_DEFAULT))
-    processed.setdefault("ev_charging_sensor", "")
-    processed.setdefault("price_sensor", "")
+    processed.setdefault("temp_sensor", "")
     processed.setdefault("zonneplan_sensor", "")
-    processed.setdefault("feed_in_tariff_sensor", "")
-    processed.setdefault("solar_forecast_sensor", "")
-    processed.setdefault("pv_present", False)
 
-    processed.pop("reset_profile_on_save", None)
+    solar_sensor = processed.get("solar_forecast_sensor") or ""
+    processed["solar_forecast_sensor"] = solar_sensor
+    processed["pv_present"] = bool(solar_sensor)
+
     return processed
 
 
@@ -252,104 +156,37 @@ class BatteryLabsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user",
             data_schema=_schema_sensors(self._data),
-            description_placeholders={"info": "Wijs de P1-sensoren aan van je slimme meter, één import én export per fase."},
+            description_placeholders={"info": "Wijs de P1-sensoren aan van je slimme meter, één import én export per fase. Temperatuursensor is optioneel (standaard 20°C)."},
         )
 
     async def async_step_hardware(self, user_input=None):
         if user_input is not None:
             self._data.update(user_input)
-            return await self.async_step_contract()
+            return await self.async_step_energie()
         return self.async_show_form(
             step_id="hardware",
             data_schema=_schema_hardware(self._data),
-            description_placeholders={"info": "Kies de hardware die jouw installatie het best beschrijft."},
+            description_placeholders={"info": "Kies de hardware die jouw installatie het best beschrijft. Systeemkostprijs is optioneel (0 = geen ROI-berekening)."},
         )
 
-    async def async_step_contract(self, user_input=None):
+    async def async_step_energie(self, user_input=None):
         if user_input is not None:
             self._data.update(user_input)
-            return await self.async_step_pricing()
+            return await self.async_step_zon()
         return self.async_show_form(
-            step_id="contract",
-            data_schema=_schema_contract(self._data),
-            description_placeholders={"info": "Dynamisch = Zonneplan uurprijzen. Vast = tijdsblokken (nacht/dag/piek)."},
+            step_id="energie",
+            data_schema=_schema_energie(self._data),
+            description_placeholders={"info": "Prijssensor is optioneel -- heeft hij een uurprijzen-forecast, dan optimaliseert het systeem daarop; anders (of zonder sensor) gebruikt het altijd het vaste tarief."},
         )
 
-    async def async_step_pricing(self, user_input=None):
-        if user_input is not None:
-            self._data.update(user_input)
-            return await self.async_step_feed_in()
-        contract = self._data.get("contract_type", CONTRACT_DYNAMIC)
-        if contract == CONTRACT_FIXED:
-            return self.async_show_form(
-                step_id="pricing",
-                data_schema=_schema_pricing_fixed(self._data),
-                description_placeholders={"info": "Vul je vaste kWh-prijs in. Tijdsblokken leeg laten = standaard nacht/dag/avondpiek."},
-            )
-        return self.async_show_form(
-            step_id="pricing",
-            data_schema=_schema_pricing_dynamic(self._data),
-            description_placeholders={"info": "Wijs je prijssensor aan. Zonneplan (optioneel) geeft uurprijzen voor 48 uur vooruit."},
-        )
-
-    async def async_step_feed_in(self, user_input=None):
-        if user_input is not None:
-            self._data.update(user_input)
-            return await self.async_step_feed_in_detail()
-        return self.async_show_form(
-            step_id="feed_in",
-            data_schema=_schema_feed_in_mode(self._data),
-            description_placeholders={"info": "Terugleveringstarief voor PV-overschot dat de batterij niet opvangt."},
-        )
-
-    async def async_step_feed_in_detail(self, user_input=None):
-        if user_input is not None:
-            self._data.update(user_input)
-            return await self.async_step_pv_choice()
-        mode = self._data.get("feed_in_mode", FEED_IN_MODE_FIXED)
-        if mode == FEED_IN_MODE_SENSOR:
-            return self.async_show_form(
-                step_id="feed_in_detail",
-                data_schema=_schema_feed_in_sensor(self._data),
-                description_placeholders={"info": "Wijs de sensor aan die het huidige terugleveringstarief levert."},
-            )
-        return self.async_show_form(
-            step_id="feed_in_detail",
-            data_schema=_schema_feed_in_fixed(self._data),
-            description_placeholders={"info": "Vul het vaste terugleveringstarief in euro per kWh in."},
-        )
-
-    async def async_step_pv_choice(self, user_input=None):
-        if user_input is not None:
-            self._data.update(user_input)
-            if user_input.get("pv_present", False):
-                return await self.async_step_pv_sensor()
-            self._data["solar_forecast_sensor"] = ""
-            return await self.async_step_ev()
-        return self.async_show_form(
-            step_id="pv_choice",
-            data_schema=_schema_pv_choice(self._data),
-            description_placeholders={"info": "Heb je zonnepanelen? De optimizer gebruikt de verwachte dagproductie in zijn planning."},
-        )
-
-    async def async_step_pv_sensor(self, user_input=None):
-        if user_input is not None:
-            self._data.update(user_input)
-            return await self.async_step_ev()
-        return self.async_show_form(
-            step_id="pv_sensor",
-            data_schema=_schema_pv_sensor(self._data),
-            description_placeholders={"info": "Wijs de forecast.solar sensor aan met de verwachte dagproductie in kWh."},
-        )
-
-    async def async_step_ev(self, user_input=None):
+    async def async_step_zon(self, user_input=None):
         if user_input is not None:
             self._data.update(user_input)
             return self._create_entry()
         return self.async_show_form(
-            step_id="ev",
-            data_schema=_schema_ev(self._data),
-            description_placeholders={"info": "Optioneel: wijs een binary sensor aan die aangeeft wanneer je EV laadt. De batterij houdt dan een minimale reserve aan."},
+            step_id="zon",
+            data_schema=_schema_zon(self._data),
+            description_placeholders={"info": "Heb je zonnepanelen? Wijs de forecast.solar sensor aan met de verwachte dagproductie. Laat leeg als je geen PV hebt."},
         )
 
     def _create_entry(self):
@@ -397,18 +234,16 @@ class BatteryLabsOptionsFlowHandler(config_entries.OptionsFlow):
         return self.async_show_menu(
             step_id="init",
             menu_options={
-                "opt_sensors":  "🔌  P1 sensoren & temperatuur",
-                "opt_hardware": "⚙️  Hardware & instellingen",
-                "opt_contract": "💶  Contracttype & prijzen",
-                "opt_feed_in":  "🔋  Terugleveringstarief",
-                "opt_pv":       "☀️  Zonnepanelen & forecast",
-                "opt_ev":       "🚗  EV-laden reserve",
+                "opt_sensors":  "🔌  Sensoren",
+                "opt_hardware": "⚙️  Hardware",
+                "opt_energie":  "💶  Energie & prijs",
+                "opt_zon":      "☀️  Zonnepanelen",
                 "opt_reset":    "🔄  Reset leerprofiel",
             },
         )
 
     # ------------------------------------------------------------------
-    # Sectie: P1 sensoren
+    # Sectie: Sensoren
     # ------------------------------------------------------------------
 
     async def async_step_opt_sensors(self, user_input=None):
@@ -422,7 +257,7 @@ class BatteryLabsOptionsFlowHandler(config_entries.OptionsFlow):
         )
 
     # ------------------------------------------------------------------
-    # Sectie: Hardware & instellingen
+    # Sectie: Hardware
     # ------------------------------------------------------------------
 
     async def async_step_opt_hardware(self, user_input=None):
@@ -432,110 +267,35 @@ class BatteryLabsOptionsFlowHandler(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="opt_hardware",
             data_schema=_schema_hardware(self._data),
-            description_placeholders={"info": "Wijzig het batterij- of omvormermodel, SoC-grens of update-interval."},
+            description_placeholders={"info": "Wijzig het batterij- of omvormermodel, SoC-grens of systeemkostprijs."},
         )
 
     # ------------------------------------------------------------------
-    # Sectie: Contract & prijzen (twee substappen)
+    # Sectie: Energie & prijs
     # ------------------------------------------------------------------
 
-    async def async_step_opt_contract(self, user_input=None):
-        if user_input is not None:
-            self._data.update(user_input)
-            return await self.async_step_opt_pricing()
-        return self.async_show_form(
-            step_id="opt_contract",
-            data_schema=_schema_contract(self._data),
-            description_placeholders={"info": "Dynamisch = Zonneplan uurprijzen. Vast = tijdsblokken (nacht/dag/piek)."},
-        )
-
-    async def async_step_opt_pricing(self, user_input=None):
-        if user_input is not None:
-            self._data.update(user_input)
-            return await self._save()
-        contract = self._data.get("contract_type", CONTRACT_DYNAMIC)
-        if contract == CONTRACT_FIXED:
-            return self.async_show_form(
-                step_id="opt_pricing",
-                data_schema=_schema_pricing_fixed(self._data),
-                description_placeholders={"info": "Vul je vaste kWh-prijs in. Tijdsblokken leeg = standaard nacht/dag/avondpiek."},
-            )
-        return self.async_show_form(
-            step_id="opt_pricing",
-            data_schema=_schema_pricing_dynamic(self._data),
-            description_placeholders={"info": "Wijs je prijssensor aan. Zonneplan (optioneel) geeft uurprijzen voor 48 uur vooruit."},
-        )
-
-    # ------------------------------------------------------------------
-    # Sectie: Terugleveringstarief (twee substappen)
-    # ------------------------------------------------------------------
-
-    async def async_step_opt_feed_in(self, user_input=None):
-        if user_input is not None:
-            self._data.update(user_input)
-            return await self.async_step_opt_feed_in_detail()
-        return self.async_show_form(
-            step_id="opt_feed_in",
-            data_schema=_schema_feed_in_mode(self._data),
-            description_placeholders={"info": "Terugleveringstarief voor PV-overschot dat de batterij niet opvangt."},
-        )
-
-    async def async_step_opt_feed_in_detail(self, user_input=None):
-        if user_input is not None:
-            self._data.update(user_input)
-            return await self._save()
-        mode = self._data.get("feed_in_mode", FEED_IN_MODE_FIXED)
-        if mode == FEED_IN_MODE_SENSOR:
-            return self.async_show_form(
-                step_id="opt_feed_in_detail",
-                data_schema=_schema_feed_in_sensor(self._data),
-                description_placeholders={"info": "Wijs de sensor aan die het huidige terugleveringstarief levert."},
-            )
-        return self.async_show_form(
-            step_id="opt_feed_in_detail",
-            data_schema=_schema_feed_in_fixed(self._data),
-            description_placeholders={"info": "Vul het vaste terugleveringstarief in euro per kWh in."},
-        )
-
-    # ------------------------------------------------------------------
-    # Sectie: PV & forecast (twee substappen)
-    # ------------------------------------------------------------------
-
-    async def async_step_opt_pv(self, user_input=None):
-        if user_input is not None:
-            self._data.update(user_input)
-            if user_input.get("pv_present", False):
-                return await self.async_step_opt_pv_sensor()
-            self._data["solar_forecast_sensor"] = ""
-            return await self._save()
-        return self.async_show_form(
-            step_id="opt_pv",
-            data_schema=_schema_pv_choice(self._data),
-            description_placeholders={"info": "Schakel PV in of uit. Bij uitschakelen wordt de forecast sensor gewist."},
-        )
-
-    async def async_step_opt_pv_sensor(self, user_input=None):
+    async def async_step_opt_energie(self, user_input=None):
         if user_input is not None:
             self._data.update(user_input)
             return await self._save()
         return self.async_show_form(
-            step_id="opt_pv_sensor",
-            data_schema=_schema_pv_sensor(self._data),
-            description_placeholders={"info": "Wijs de forecast.solar sensor aan met de verwachte dagproductie in kWh."},
+            step_id="opt_energie",
+            data_schema=_schema_energie(self._data),
+            description_placeholders={"info": "Prijssensor is optioneel -- met forecast-attribuut wordt dynamisch geoptimaliseerd, anders geldt altijd het vaste tarief."},
         )
 
     # ------------------------------------------------------------------
-    # Sectie: EV-laden reserve
+    # Sectie: Zonnepanelen
     # ------------------------------------------------------------------
 
-    async def async_step_opt_ev(self, user_input=None):
+    async def async_step_opt_zon(self, user_input=None):
         if user_input is not None:
             self._data.update(user_input)
             return await self._save()
         return self.async_show_form(
-            step_id="opt_ev",
-            data_schema=_schema_ev(self._data),
-            description_placeholders={"info": "Wijs de binary sensor aan die aangeeft wanneer je EV laadt. De batterij houdt dan de ingestelde minimale reserve aan."},
+            step_id="opt_zon",
+            data_schema=_schema_zon(self._data),
+            description_placeholders={"info": "Wijs de forecast.solar sensor aan, of laat leeg om PV uit te schakelen."},
         )
 
     # ------------------------------------------------------------------
@@ -559,8 +319,8 @@ class BatteryLabsOptionsFlowHandler(config_entries.OptionsFlow):
             description_placeholders={
                 "info": (
                     "Wis het leerproces volledig. Besparing, cycli en "
-                    "batterijgezondheid blijven bewaard. De integratie valt "
-                    "terug op Smart Dynamic totdat er nieuwe profieldata is."
+                    "batterijgezondheid blijven bewaard. Het systeem valt "
+                    "terug op eenvoudige regels totdat er nieuwe profieldata is."
                 )
             },
         )

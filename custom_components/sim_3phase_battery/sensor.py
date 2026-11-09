@@ -1,10 +1,14 @@
+import asyncio
 import logging
 import json
 import os
 import math
+import bisect
+import time
 from datetime import datetime, timedelta, timezone
 
 from homeassistant.helpers.event import async_track_time_interval, async_track_state_change_event
+from homeassistant.helpers import entity_registry as er
 from homeassistant.components.sensor import SensorEntity, SensorStateClass, SensorDeviceClass
 from homeassistant.const import (
     PERCENTAGE, UnitOfPower, UnitOfTemperature,
@@ -24,15 +28,38 @@ from .const import (
     FEED_IN_MODE_FIXED, FEED_IN_MODE_SENSOR, FEED_IN_TARIFF_DEFAULT_EUR,
     DC_VOLTAGE_MIN, POWER_ACTIVE_THRESHOLD_W, INV_THERMAL_RESISTANCE,
     SOH_WARNING_THRESHOLD, TEMP_BAT_WARNING_HIGH, TEMP_BAT_CAUTION_LOW,
-    MODE_ECO, MODE_SMART, MODE_FORCE, MODE_SMART_PRO,
+    MODE_AUTO, MODE_FORCE, ALL_MODES,
     PROFILE_STATUS_LEARNING, PROFILE_STATUS_ACTIVE_LIMITED, PROFILE_STATUS_ACTIVE_RELIABLE,
     CONTRACT_DYNAMIC, CONTRACT_FIXED, FIXED_CONTRACT_TIME_BLOCKS_DEFAULT,
 )
 from .hardware_profiles import PYLONTECH_PROFILES, VICTRON_PROFILES
 from . import dp_optimizer
 from . import advisor as advisor_module
+from . import forecast_learning
 
 _LOGGER = logging.getLogger(__name__)
+
+
+# Begrenst het aantal DP-stappen ongeacht de brondata-resolutie of -horizon.
+# 96 stappen = 24u bij kwartierdata (dezelfde horizon als OPTIMIZER_PLAN_HORIZON_H)
+# of 96u bij uurdata -- ruim boven de oorspronkelijke ~34 uur, maar begrensd
+# zodat de rekentijd nooit ongecontroleerd meegroeit met een langere/fijnere
+# forecast-bron.
+MAX_DP_PLAN_STEPS = 96
+
+
+def _detect_step_hours(forecast: list) -> float:
+    """Leidt de tijdstap (in klokuren) van een prijs-forecast af uit het
+    verschil tussen de eerste twee entries. 1.0 voor uurprijzen, 0.25 voor
+    kwartierprijzen. Valt terug op 1.0 (backwards compatible) als er te
+    weinig data is of de forecast geen bruikbare timestamps heeft."""
+    if not forecast or len(forecast) < 2:
+        return 1.0
+    try:
+        delta = (forecast[1]["hour"] - forecast[0]["hour"]).total_seconds() / 3600.0
+    except (KeyError, TypeError):
+        return 1.0
+    return delta if delta > 0 else 1.0
 
 
 async def async_setup_entry(hass, config_entry, async_add_entities):
@@ -41,72 +68,75 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     sensors = [
         BatterySensor(coordinator, "SoC", "soc", PERCENTAGE, SensorDeviceClass.BATTERY),
         BatterySensor(coordinator, "Batterij Vermogen Totaal", "p_total", UnitOfPower.WATT, SensorDeviceClass.POWER),
-        BatterySensor(coordinator, "Batterij DC Stroom", "i_dc", UnitOfElectricCurrent.AMPERE, SensorDeviceClass.CURRENT),
-        BatterySensor(coordinator, "Batterij DC Spanning", "v_dc", UnitOfElectricPotential.VOLT, SensorDeviceClass.VOLTAGE),
+        BatterySensor(coordinator, "Batterij DC Stroom", "i_dc", UnitOfElectricCurrent.AMPERE, SensorDeviceClass.CURRENT, enabled=False),
+        BatterySensor(coordinator, "Batterij DC Spanning", "v_dc", UnitOfElectricPotential.VOLT, SensorDeviceClass.VOLTAGE, enabled=False),
         BatterySensor(coordinator, "State of Health", "soh", PERCENTAGE, None),
-        BatterySensor(coordinator, "Batterij Cycli", "cycles", None, None),
-        BatteryTextSensor(coordinator, "Health Check", "health_msg", "mdi:heart-pulse"),
-        BatterySensor(coordinator, "Round Trip Efficiency", "rte", PERCENTAGE, None),
-        BatteryTextSensor(coordinator, "Tijd tot Leeg", "time_to_empty", "mdi:battery-clock"),
-        BatteryTextSensor(coordinator, "Tijd tot Vol", "time_to_full", "mdi:battery-arrow-up-clock"),
-        BatterySensor(coordinator, "Zon naar Batterij", "solar_to_bat", UnitOfPower.WATT, SensorDeviceClass.POWER),
-        BatterySensor(coordinator, "Zon naar Net", "solar_to_grid", UnitOfPower.WATT, SensorDeviceClass.POWER),
-        BatterySensor(coordinator, "P1 Werkelijk Totaal", "p_net_real", UnitOfPower.WATT, SensorDeviceClass.POWER),
+        BatterySensor(coordinator, "Batterij Cycli", "cycles", None, None, enabled=False),
+        BatteryTextSensor(coordinator, "Health Check", "health_msg", "mdi:heart-pulse", enabled=False),
+        BatterySensor(coordinator, "Round Trip Efficiency", "rte", PERCENTAGE, None, enabled=False),
+        BatteryTextSensor(coordinator, "Tijd tot Leeg", "time_to_empty", "mdi:battery-clock", enabled=False),
+        BatteryTextSensor(coordinator, "Tijd tot Vol", "time_to_full", "mdi:battery-arrow-up-clock", enabled=False),
+        BatterySensor(coordinator, "Zon naar Batterij", "solar_to_bat", UnitOfPower.WATT, SensorDeviceClass.POWER, enabled=False),
+        BatterySensor(coordinator, "Zon naar Net", "solar_to_grid", UnitOfPower.WATT, SensorDeviceClass.POWER, enabled=False),
+        BatterySensor(coordinator, "P1 Werkelijk Totaal", "p_net_real", UnitOfPower.WATT, SensorDeviceClass.POWER, enabled=False),
         BatterySensor(coordinator, "Besparing Totaal", "savings", CURRENCY_EURO, SensorDeviceClass.MONETARY),
         BatterySensor(coordinator, "ROI Percentage", "roi_perc", PERCENTAGE, None),
-        BatterySensor(coordinator, "Batterij Geladen Totaal", "energy_in", UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY),
-        BatterySensor(coordinator, "Batterij Ontladen Totaal", "energy_out", UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY),
-        BatterySensor(coordinator, "Inverter L1 Vermogen", "p1", UnitOfPower.WATT, SensorDeviceClass.POWER),
-        BatterySensor(coordinator, "Inverter L2 Vermogen", "p2", UnitOfPower.WATT, SensorDeviceClass.POWER),
-        BatterySensor(coordinator, "Inverter L3 Vermogen", "p3", UnitOfPower.WATT, SensorDeviceClass.POWER),
-        BatterySensor(coordinator, "Netto P1 Totaal (Sim)", "sim_p_total", UnitOfPower.WATT, SensorDeviceClass.POWER),
-        BatterySensor(coordinator, "Netto P1 L1 (Sim)", "sim_p1", UnitOfPower.WATT, SensorDeviceClass.POWER),
-        BatterySensor(coordinator, "Netto P1 L2 (Sim)", "sim_p2", UnitOfPower.WATT, SensorDeviceClass.POWER),
-        BatterySensor(coordinator, "Netto P1 L3 (Sim)", "sim_p3", UnitOfPower.WATT, SensorDeviceClass.POWER),
-        BatterySensor(coordinator, "Autarkie Score", "autarky", PERCENTAGE, None),
-        BatterySensor(coordinator, "Eigenverbruik Score", "self_consumption", PERCENTAGE, None),
-        BatterySensor(coordinator, "Batterij Temperatuur", "t_bat", UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE),
-        BatterySensor(coordinator, "Inverter L1 Temperatuur", "t_inv1", UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE),
-        BatterySensor(coordinator, "Inverter L2 Temperatuur", "t_inv2", UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE),
-        BatterySensor(coordinator, "Inverter L3 Temperatuur", "t_inv3", UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE),
+        BatterySensor(coordinator, "Batterij Geladen Totaal", "energy_in", UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY, enabled=False),
+        BatterySensor(coordinator, "Batterij Ontladen Totaal", "energy_out", UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY, enabled=False),
+        BatterySensor(coordinator, "Inverter L1 Vermogen", "p1", UnitOfPower.WATT, SensorDeviceClass.POWER, enabled=False),
+        BatterySensor(coordinator, "Inverter L2 Vermogen", "p2", UnitOfPower.WATT, SensorDeviceClass.POWER, enabled=False),
+        BatterySensor(coordinator, "Inverter L3 Vermogen", "p3", UnitOfPower.WATT, SensorDeviceClass.POWER, enabled=False),
+        BatterySensor(coordinator, "Netto P1 Totaal (Sim)", "sim_p_total", UnitOfPower.WATT, SensorDeviceClass.POWER, enabled=False),
+        BatterySensor(coordinator, "Netto P1 L1 (Sim)", "sim_p1", UnitOfPower.WATT, SensorDeviceClass.POWER, enabled=False),
+        BatterySensor(coordinator, "Netto P1 L2 (Sim)", "sim_p2", UnitOfPower.WATT, SensorDeviceClass.POWER, enabled=False),
+        BatterySensor(coordinator, "Netto P1 L3 (Sim)", "sim_p3", UnitOfPower.WATT, SensorDeviceClass.POWER, enabled=False),
+        BatterySensor(coordinator, "Autarkie Score", "autarky", PERCENTAGE, None, enabled=False),
+        BatterySensor(coordinator, "Eigenverbruik Score", "self_consumption", PERCENTAGE, None, enabled=False),
+        BatterySensor(coordinator, "Batterij Temperatuur", "t_bat", UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE, enabled=False),
+        BatterySensor(coordinator, "Inverter L1 Temperatuur", "t_inv1", UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE, enabled=False),
+        BatterySensor(coordinator, "Inverter L2 Temperatuur", "t_inv2", UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE, enabled=False),
+        BatterySensor(coordinator, "Inverter L3 Temperatuur", "t_inv3", UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE, enabled=False),
         BatteryStatusSensor(coordinator),
-        BatteryInverterStatusSensor(coordinator, "L1", "inv_l1_stat"),
-        BatteryInverterStatusSensor(coordinator, "L2", "inv_l2_stat"),
-        BatteryInverterStatusSensor(coordinator, "L3", "inv_l3_stat"),
+        BatteryInverterStatusSensor(coordinator, "L1", "inv_l1_stat", enabled=False),
+        BatteryInverterStatusSensor(coordinator, "L2", "inv_l2_stat", enabled=False),
+        BatteryInverterStatusSensor(coordinator, "L3", "inv_l3_stat", enabled=False),
         BatteryTextSensor(coordinator, "Actie Nu", "actie_uitleg", "mdi:information"),
-        BatteryTextSensor(coordinator, "Actie Reden", "actie_reden", "mdi:text-box"),
+        BatteryTextSensor(coordinator, "Actie Reden", "actie_reden", "mdi:text-box", enabled=False),
         BatteryTextSensor(coordinator, "Plan Actie Huidig Uur", "plan_action", "mdi:lightning-bolt"),
-        BatterySensor(coordinator, "Plan SoC Doel", "plan_soc_target", PERCENTAGE, None),
-        BatteryTextSensor(coordinator, "Volgende Actie", "plan_next_action", "mdi:lightning-bolt-outline"),
-        BatterySensor(coordinator, "Verwachte Besparing 24h", "plan_savings_24h", CURRENCY_EURO, SensorDeviceClass.MONETARY),
-        BatterySensor(coordinator, "PV Verwacht Vandaag", "pv_forecast_today_kwh", UnitOfEnergy.KILO_WATT_HOUR, None),
-        BatterySensor(coordinator, "SoH Degradatie Rate", "soh_degradation_rate", PERCENTAGE, None),
-        BatterySensor(coordinator, "Verwachte Jaarlijkse Besparing", "savings_per_year", CURRENCY_EURO, SensorDeviceClass.MONETARY),
-        BatterySensor(coordinator, "Restcapaciteit", "restcapaciteit_kwh", UnitOfEnergy.KILO_WATT_HOUR, None),
-        BatterySensor(coordinator, "Huisreserve SoC", "_house_reserve_soc", PERCENTAGE, None),
-        BatterySensor(coordinator, "Dagspread Prijs", "day_spread_eur", CURRENCY_EURO, SensorDeviceClass.MONETARY),
-        BatterySensor(coordinator, "DP Verwachte Kosten", "dp_expected_cost_eur", CURRENCY_EURO, SensorDeviceClass.MONETARY),
-        BatterySensor(coordinator, "Arbitrage Diepte", "_arbitrage_depth_pct", PERCENTAGE, None),
+        BatterySensor(coordinator, "Plan SoC Doel", "plan_soc_target", PERCENTAGE, None, enabled=False),
+        BatteryTextSensor(coordinator, "Volgende Actie", "plan_next_action", "mdi:lightning-bolt-outline", enabled=False),
+        BatterySensor(coordinator, "Verwachte Besparing 24h", "plan_savings_24h", CURRENCY_EURO, SensorDeviceClass.MONETARY, enabled=False),
+        BatterySensor(coordinator, "PV Verwacht Vandaag", "pv_forecast_today_kwh", UnitOfEnergy.KILO_WATT_HOUR, None, enabled=False),
+        BatterySensor(coordinator, "SoH Degradatie Rate", "soh_degradation_rate", PERCENTAGE, None, enabled=False),
+        BatterySensor(coordinator, "Verwachte Jaarlijkse Besparing", "savings_per_year", CURRENCY_EURO, SensorDeviceClass.MONETARY, enabled=False),
+        BatterySensor(coordinator, "Restcapaciteit", "restcapaciteit_kwh", UnitOfEnergy.KILO_WATT_HOUR, None, enabled=False),
+        BatterySensor(coordinator, "Huisreserve SoC", "_house_reserve_soc", PERCENTAGE, None, enabled=False),
+        BatterySensor(coordinator, "Dagspread Prijs", "day_spread_eur", CURRENCY_EURO, SensorDeviceClass.MONETARY, enabled=False),
+        BatterySensor(coordinator, "DP Verwachte Kosten", "dp_expected_cost_eur", CURRENCY_EURO, SensorDeviceClass.MONETARY, enabled=False),
+        BatterySensor(coordinator, "Arbitrage Diepte", "_arbitrage_depth_pct", PERCENTAGE, None, enabled=False),
         BatteryProfileSensor(coordinator),
-        BatteryTextSensor(coordinator, "Advies Systeem Samenvatting", "advies_systeem_samenvatting", "mdi:robot"),
-        BatteryTextSensor(coordinator, "Advies Financieel v2", "advies_financieel_v2", "mdi:cash-multiple"),
-        BatteryTextSensor(coordinator, "Advies Omvormer v2", "advies_omvormer_v2", "mdi:lightning-bolt"),
-        BatteryTextSensor(coordinator, "Advies Capaciteit v2", "advies_capaciteit_v2", "mdi:battery-charging"),
-        BatteryTextSensor(coordinator, "Advies Levensduur v2", "advies_levensduur_v2", "mdi:heart-pulse"),
-        BatterySensor(coordinator,     "Systeem Score",      "score_totaal",     PERCENTAGE, None),
-        BatteryTextSensor(coordinator, "Score Klasse",       "score_klasse",     "mdi:gauge"),
-        BatterySensor(coordinator,     "Score Capaciteit",   "score_capaciteit", PERCENTAGE, None),
-        BatterySensor(coordinator,     "Score Omvormer",     "score_omvormer",   PERCENTAGE, None),
-        BatterySensor(coordinator,     "Score Rendement",    "score_rte",        PERCENTAGE, None),
-        BatterySensor(coordinator,     "Score Financieel",   "score_financieel", PERCENTAGE, None),
-        BatterySensor(coordinator,     "Score Gezondheid",   "score_gezondheid", PERCENTAGE, None),
-        BatterySensor(coordinator,     "Score EV",           "score_ev",         PERCENTAGE, None),
-        BatteryTextSensor(coordinator, "Advies Capaciteit",  "advies_capaciteit",  "mdi:battery-charging"),
-        BatteryTextSensor(coordinator, "Advies Omvormer",    "advies_omvormer",    "mdi:lightning-bolt"),
-        BatteryTextSensor(coordinator, "Advies Rendement",   "advies_rte",         "mdi:chart-line"),
-        BatteryTextSensor(coordinator, "Advies Financieel",  "advies_financieel",  "mdi:cash-multiple"),
-        BatteryTextSensor(coordinator, "Advies Gezondheid",  "advies_gezondheid",  "mdi:heart-pulse"),
-        BatteryTextSensor(coordinator, "Advies EV",          "advies_ev",          "mdi:car-electric"),
+        BatteryTextSensor(coordinator, "Forecast Leren Samenvatting", "forecast_leren_samenvatting", "mdi:school", enabled=False),
+        BatterySensor(coordinator, "Forecast Nauwkeurigheid PV", "forecast_leren_pv_nauwkeurigheid", PERCENTAGE, None, enabled=False),
+        BatterySensor(coordinator, "Forecast Nauwkeurigheid Verbruik", "forecast_leren_verbruik_nauwkeurigheid", PERCENTAGE, None, enabled=False),
+        BatteryTextSensor(coordinator, "Advies Systeem Samenvatting", "advies_systeem_samenvatting", "mdi:robot", enabled=False),
+        BatteryTextSensor(coordinator, "Advies Financieel v2", "advies_financieel_v2", "mdi:cash-multiple", enabled=False),
+        BatteryTextSensor(coordinator, "Advies Omvormer v2", "advies_omvormer_v2", "mdi:lightning-bolt", enabled=False),
+        BatteryTextSensor(coordinator, "Advies Capaciteit v2", "advies_capaciteit_v2", "mdi:battery-charging", enabled=False),
+        BatteryTextSensor(coordinator, "Advies Levensduur v2", "advies_levensduur_v2", "mdi:heart-pulse", enabled=False),
+        BatterySensor(coordinator,     "Systeem Score",      "score_totaal",     PERCENTAGE, None, enabled=False),
+        BatteryTextSensor(coordinator, "Score Klasse",       "score_klasse",     "mdi:gauge", enabled=False),
+        BatterySensor(coordinator,     "Score Capaciteit",   "score_capaciteit", PERCENTAGE, None, enabled=False),
+        BatterySensor(coordinator,     "Score Omvormer",     "score_omvormer",   PERCENTAGE, None, enabled=False),
+        BatterySensor(coordinator,     "Score Rendement",    "score_rte",        PERCENTAGE, None, enabled=False),
+        BatterySensor(coordinator,     "Score Financieel",   "score_financieel", PERCENTAGE, None, enabled=False),
+        BatterySensor(coordinator,     "Score Gezondheid",   "score_gezondheid", PERCENTAGE, None, enabled=False),
+        BatterySensor(coordinator,     "Score EV",           "score_ev",         PERCENTAGE, None, enabled=False),
+        BatteryTextSensor(coordinator, "Advies Capaciteit",  "advies_capaciteit",  "mdi:battery-charging", enabled=False),
+        BatteryTextSensor(coordinator, "Advies Omvormer",    "advies_omvormer",    "mdi:lightning-bolt", enabled=False),
+        BatteryTextSensor(coordinator, "Advies Rendement",   "advies_rte",         "mdi:chart-line", enabled=False),
+        BatteryTextSensor(coordinator, "Advies Financieel",  "advies_financieel",  "mdi:cash-multiple", enabled=False),
+        BatteryTextSensor(coordinator, "Advies Gezondheid",  "advies_gezondheid",  "mdi:heart-pulse", enabled=False),
+        BatteryTextSensor(coordinator, "Advies EV",          "advies_ev",          "mdi:car-electric", enabled=False),
     ]
 
     async_add_entities(sensors)
@@ -354,6 +384,7 @@ class BatteryCoordinator:
         self._last_run = datetime.now()
         self._last_slow_run = datetime.now()
         self._last_plan_hour = -1
+        self._last_forecast_record_hour = -1
 
         bat_model = config.get("battery_model", "US5000")
         inv_model = config.get("inverter_model", "MultiPlus-II 48/5000")
@@ -375,9 +406,14 @@ class BatteryCoordinator:
         self._profile_days: list[list[set]] = [[set() for _ in range(24)] for _ in range(7)]
 
         self._plan: dict = {}
+        self._plan_step_hours: float = 1.0
+        self._plan_keys_sorted: list = []
+        self._dp_building: bool = False
         self._ps_active: bool = False
         self._t_bat_internal: float = 20.0
         self._t_inv_internal: list = [25.0, 25.0, 25.0]
+        self._pv_forecast_cache: dict = {}
+        self._pv_forecast_fetched_at: datetime = datetime.min
 
         self.data = {
             "soc": 50.0, "soh": 100.0, "savings": 0.0,
@@ -392,7 +428,7 @@ class BatteryCoordinator:
             "t_bat": 20.0, "t_inv1": 25.0, "t_inv2": 25.0, "t_inv3": 25.0,
             "status": "Standby",
             "inv_l1_stat": "Standby", "inv_l2_stat": "Standby", "inv_l3_stat": "Standby",
-            "mode": MODE_SMART,
+            "mode": MODE_AUTO,
             "plan_action": "N.v.t.", "plan_soc_target": 50.0,
             "plan_next_action": "N.v.t.", "plan_savings_24h": 0.0,
             "pv_forecast_today_kwh": 0.0, "soh_degradation_rate": 0.0,
@@ -420,7 +456,9 @@ class BatteryCoordinator:
             "actie_reden": "",
             "restcapaciteit_kwh": 0.0,
             "_advisor_days": 0.0,
-            "savings_per_year": 0.0,
+            "forecast_leren_samenvatting": "Nog aan het leren -- onvoldoende vergelijkingen tussen voorspelling en realiteit.",
+            "forecast_leren_pv_nauwkeurigheid": 0.0, "forecast_leren_verbruik_nauwkeurigheid": 0.0,
+            "verbruik_forecast_w": [],
             "install_date": datetime.now().strftime("%Y-%m-%d"),
             "score_totaal": 50.0, "score_klasse": "Lerende fase",
             "score_capaciteit": 50.0, "score_omvormer": 50.0, "score_rte": 50.0,
@@ -435,6 +473,7 @@ class BatteryCoordinator:
         )
         self._score_engine = ScoreEngine()
         self._advisor_state = advisor_module.AdvisorState()
+        self._forecast_learning = forecast_learning.ForecastLearningState()
         self._listeners: list = []
 
     def set_cancel_timer(self, cancel_p1, cancel_slow=None):
@@ -478,6 +517,9 @@ class BatteryCoordinator:
             if "score_engine" in loaded:
                 self._score_engine.from_dict(loaded["score_engine"])
 
+        if self.data.get("mode") not in ALL_MODES:
+            self.data["mode"] = MODE_AUTO
+
     async def _async_save_data(self):
         snapshot = {k: self.data[k] for k in (
             "soc", "soh", "savings", "energy_in", "energy_out",
@@ -520,10 +562,12 @@ class BatteryCoordinator:
                 ]
             if "last_reset" in loaded:
                 self.data["profile_last_reset"] = loaded["last_reset"]
+            if "forecast_learning" in loaded:
+                self._forecast_learning.from_dict(loaded["forecast_learning"])
 
         self._backfill_advisor_state()
 
-    def _backfill_advisor_state(self):  # noqa: placeholder-marker-v1
+    def _backfill_advisor_state(self):
         """Initialiseert advisor peak-power uit het bestaande verbruiksprofiel."""
         if self._advisor_state.peak_power_l1 > 0:
             return
@@ -549,6 +593,7 @@ class BatteryCoordinator:
             "profile": self._profile,
             "profile_days": profile_days_serializable,
             "last_reset": self.data["profile_last_reset"],
+            "forecast_learning": self._forecast_learning.to_dict(),
         }
 
         def _write():
@@ -563,7 +608,7 @@ class BatteryCoordinator:
     async def async_reset_profile(self):
         self._profile = [[0.0] * 24 for _ in range(7)]
         self._profile_days = [[set() for _ in range(24)] for _ in range(7)]
-        self._plan = {}
+        self._set_plan({})
         self.data["profile_last_reset"] = datetime.now().strftime("%Y-%m-%d %H:%M")
         self.data["profile_pct"] = 0.0
         self.data["profile_status"] = PROFILE_STATUS_LEARNING
@@ -664,15 +709,18 @@ class BatteryCoordinator:
         result = []
         for entry in raw:
             try:
-                price_raw = entry.get("electricity_price", 0)
+                price_raw = entry.get("electricity_price") or (entry.get("price_tax_included") or {}).get("amount", 0)
                 price_eur = price_raw / ZONNEPLAN_PRICE_DIVISOR
-                dt_str = entry.get("datetime", "")
-                dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                dt_raw = entry.get("datetime") or entry.get("start_date", "")
+                if isinstance(dt_raw, datetime):
+                    dt = dt_raw if dt_raw.tzinfo else dt_raw.replace(tzinfo=timezone.utc)
+                else:
+                    dt = datetime.fromisoformat(str(dt_raw).replace("Z", "+00:00"))
                 result.append({
                     "hour": dt,
                     "price_eur": price_eur,
                     "tariff": entry.get("tariff_group", "normal"),
-                    "sustainability": entry.get("sustainability_score", 0),
+                    "sustainability": entry.get("sustainability_score") if isinstance(entry.get("sustainability_score"), (int, float)) else (entry.get("sustainability_score") or {}).get("permille", 0),
                     "negative": price_eur < PRICE_NEGATIVE_THRESHOLD,
                 })
             except Exception as exc:
@@ -737,6 +785,10 @@ class BatteryCoordinator:
         if not self._config.get("pv_present", False):
             return [0.0] * 24
 
+        cached = self._pv_forecast_cache.get("hourly_wh") if self._pv_forecast_cache else None
+        if cached and sum(cached) > 0:
+            return cached
+
         sensor_id = self._config.get("solar_forecast_sensor", "")
         total_kwh = self._safe_state(sensor_id, fallback=0.0)
         total_wh = total_kwh * 1000
@@ -751,6 +803,49 @@ class BatteryCoordinator:
 
         total_weight = sum(weights)
         return [(w / total_weight) * total_wh for w in weights]
+
+    async def _refresh_solar_forecast(self, now_local: datetime) -> None:
+        """Haalt de echte uur-voor-uur PV-forecast op via de forecast.solar
+        service als de gekoppelde sensor van die integratie komt, en cachet
+        die voor _get_pv_hourly_forecast(). Hoogstens eens per 30 minuten
+        aangeroepen om de service niet te overbelasten. Bij elke fout of als
+        de sensor niet van forecast.solar is, blijft de Gauss-curve de
+        terugval (cache leeg laten is daarvoor genoeg)."""
+        if not self._config.get("pv_present", False):
+            return
+        if self._pv_forecast_cache and (now_local - self._pv_forecast_fetched_at).total_seconds() < 1800:
+            return
+
+        sensor_id = self._config.get("solar_forecast_sensor", "")
+        if not sensor_id:
+            return
+
+        try:
+            entity_entry = er.async_get(self.hass).async_get(sensor_id)
+            if entity_entry is None or entity_entry.platform != "forecast_solar" or not entity_entry.config_entry_id:
+                return
+
+            response = await self.hass.services.async_call(
+                "forecast_solar", "get_forecast",
+                {"config_entry": entity_entry.config_entry_id, "resolution": "hourly"},
+                blocking=True, return_response=True,
+            )
+            wh_period = (response or {}).get("wh_period", {})
+            today = now_local.date()
+            hourly = [0.0] * 24
+            for ts_str, wh in wh_period.items():
+                try:
+                    ts_local = datetime.fromisoformat(ts_str).astimezone()
+                except ValueError:
+                    continue
+                if ts_local.date() == today:
+                    hourly[ts_local.hour] = float(wh)
+
+            if sum(hourly) > 0:
+                self._pv_forecast_cache = {"hourly_wh": hourly}
+                self._pv_forecast_fetched_at = now_local
+        except Exception as exc:
+            _LOGGER.debug("BatteryLabs: forecast.solar service-call mislukt (%s), val terug op Gauss-curve", exc)
 
     def _build_plan(self, now_local: datetime, p_net_phases: list,
                     price_forecast: list, profile_weight: float = 1.0) -> dict:
@@ -900,10 +995,28 @@ class BatteryCoordinator:
             action = entry.get("action", "")
             price = entry.get("price_eur", 0.0)
             if "Ontladen" in action and price > 0:
-                discharge_kwh = (cap_wh * 0.20) / 1000
+                discharge_kwh = (cap_wh * 0.20 / 1000) * (self._plan_step_hours or 1.0)
                 total += discharge_kwh * price
         return round(total, 4)
-    def _build_plan_dp(self, now_local, price_forecast, profile_weight=1.0):
+
+    def _evaluate_forecast_learning(self, now_local, actual_load_kw):
+        """Vergelijkt de voorspelling van een uur geleden met de werkelijkheid nu."""
+        key = (now_local - timedelta(hours=1)).strftime("%Y-%m-%d-%H")
+        actual_pv_w = self.data.get("solar_to_bat", 0.0) + self.data.get("solar_to_grid", 0.0)
+        actual_load_w = actual_load_kw * 1000
+        did_eval = forecast_learning.evaluate_hour(self._forecast_learning, key, actual_pv_w, actual_load_w)
+        if did_eval:
+            self.data["forecast_leren_samenvatting"] = forecast_learning.summary_text(self._forecast_learning)
+            self.data["forecast_leren_pv_nauwkeurigheid"] = forecast_learning.accuracy_pct(
+                self._forecast_learning.pv_last_error_pct, self._forecast_learning.pv_samples)
+            self.data["forecast_leren_verbruik_nauwkeurigheid"] = forecast_learning.accuracy_pct(
+                self._forecast_learning.load_last_error_pct, self._forecast_learning.load_samples)
+
+    async def _build_plan_dp(self, now_local, price_forecast, profile_weight=1.0):
+        if self._dp_building:
+            _LOGGER.debug("BatteryLabs: DP-optimizer nog bezig, sla deze rebuild over")
+            return
+
         pv_hourly = self._get_pv_hourly_forecast()
         self.data["_pv_hourly"] = pv_hourly
         self.data["pv_forecast_today_kwh"] = round(sum(pv_hourly) / 1000, 2)
@@ -911,8 +1024,19 @@ class BatteryCoordinator:
         prices_eur = [e.get("price_eur", self.data["_price_now"]) for e in price_forecast]
         n_hours = len(prices_eur)
         if n_hours == 0:
-            self._plan = {}
+            self._set_plan({})
             return
+        step_hours = _detect_step_hours(price_forecast)
+        self._plan_step_hours = step_hours
+
+        # Begrens het aantal DP-stappen ongeacht de brondata-resolutie of
+        # -horizon, zodat de rekentijd (en dus de executor-thread) altijd
+        # begrensd blijft -- ongeacht of de prijssensor uur- of kwartierdata
+        # levert, of een horizon van 1 dag of 5 dagen aanlevert.
+        if n_hours > MAX_DP_PLAN_STEPS:
+            price_forecast = price_forecast[:MAX_DP_PLAN_STEPS]
+            prices_eur = prices_eur[:MAX_DP_PLAN_STEPS]
+            n_hours = MAX_DP_PLAN_STEPS
 
         day_of_week = now_local.weekday()
         all_profile_vals = [v * 1000 for row in self._profile for v in row if v > 0]
@@ -929,11 +1053,14 @@ class BatteryCoordinator:
             mixed_w = profile_weight * profiel_w + (1 - profile_weight) * (
                 conservative_w * 1.2 if 7 <= hour < 22 else conservative_w * 0.6
             )
-            pv_w = pv_hourly[hour] if hour < len(pv_hourly) else 0.0
+            pv_w = forecast_learning.apply_pv_correction(self._forecast_learning, hour, pv_hourly[hour] if hour < len(pv_hourly) else 0.0)
+            mixed_w = forecast_learning.apply_load_correction(self._forecast_learning, hour, mixed_w)
             net_w = max(0.0, mixed_w - pv_w)
-            house_load_kwh.append(net_w / 1000.0)
-            pv_surplus_kwh.append(max(0.0, pv_w - mixed_w) / 1000.0)
+            house_load_kwh.append((net_w / 1000.0) * step_hours)
+            pv_surplus_kwh.append((max(0.0, pv_w - mixed_w) / 1000.0) * step_hours)
             sustainability.append(entry.get("sustainability", 0))
+            if i == 0:
+                forecast_learning.record_prediction(self._forecast_learning, now_local.strftime("%Y-%m-%d-%H"), pv_w, mixed_w)
 
         ps_min_soc = float(self.data.get("peak_shaving_min_soc", 15.0))
         min_soc = self._config.get("min_soc", 10.0)
@@ -941,10 +1068,18 @@ class BatteryCoordinator:
         bat_rte = self._bat_profile.rte
         eta = bat_rte ** 0.5
 
-        cycle_budget = float(self.data.get("cycle_budget_per_day", 1.5))
+        # Economische slijtagekost i.p.v. een hard cyclusbudget -- zie
+        # dp_optimizer.solve() voor de onderbouwing.
+        bat_cost_per_module = {"US2000C": 800.0, "US3000C": 1100.0, "US5000": 1600.0}
+        battery_replacement_eur = bat_cost_per_module.get(self._bat_profile.model, 1200.0) * self._modules
+        wear_coeff_eur = self._bat_profile.degradation_per_cycle(1.0) * battery_replacement_eur
         feed_in_price = self._get_feed_in_price()
+        self._dp_building = True
+        t_start = time.monotonic()
         try:
-            results, expected_cost = dp_optimizer.solve(
+            import functools
+            solve_fn = functools.partial(
+                dp_optimizer.solve,
                 prices_eur=prices_eur,
                 house_load_kwh=house_load_kwh,
                 sustainability=sustainability,
@@ -954,28 +1089,76 @@ class BatteryCoordinator:
                 max_power_kw=self._inv_profile.power_cont_25c_w * 3 / 1000.0,
                 min_soc=max(min_soc, ps_min_soc),
                 max_soc=95.0,
-                cycle_budget_per_day=cycle_budget,
+                wear_coeff_eur=wear_coeff_eur,
                 pv_surplus_kwh=pv_surplus_kwh,
                 feed_in_price_eur=feed_in_price,
                 sustainability_weight=0.05,
+                step_hours=step_hours,
             )
+            future = self.hass.async_add_executor_job(solve_fn)
+            future.add_done_callback(self._on_dp_solve_done)
+            try:
+                results, expected_cost = await asyncio.wait_for(asyncio.shield(future), timeout=45.0)
+            except asyncio.TimeoutError:
+                _LOGGER.warning(
+                    "BatteryLabs: DP-optimizer duurt langer dan 45s (%d stappen van %.2fu), "
+                    "val terug op greedy plan voor deze cyclus -- vorige berekening loopt op de "
+                    "achtergrond door en meldt zichzelf klaar",
+                    n_hours, step_hours,
+                )
+                self._set_plan(self._build_plan(now_local, [0.0, 0.0, 0.0], price_forecast, profile_weight))
+                return
         except Exception as exc:
+            self._dp_building = False
             _LOGGER.warning("BatteryLabs: DP-optimizer faalde (%s), val terug op greedy plan", exc)
-            self._plan = self._build_plan(now_local, [0.0, 0.0, 0.0], price_forecast, profile_weight)
+            self._set_plan(self._build_plan(now_local, [0.0, 0.0, 0.0], price_forecast, profile_weight))
             return
 
+        _LOGGER.info(
+            "BatteryLabs: DP-optimizer klaar in %.2fs (%d stappen van %.2fu elk)",
+            time.monotonic() - t_start, n_hours, step_hours,
+        )
         self.data["dp_expected_cost_eur"] = round(expected_cost, 4)
         plan = {}
         for r in results:
-            hour = (now_local.hour + r.hour_offset) % 24
+            slot_start = price_forecast[r.hour_offset]["hour"] if r.hour_offset < len(price_forecast) else r.hour_offset
             action = "Ontladen (DP-optimaal)" if r.action_kwh < -0.05 else (
                 "Laden (DP-optimaal)" if r.action_kwh > 0.05 else "Vasthouden (DP-optimaal)")
-            plan[hour] = {
+            plan[slot_start] = {
                 "target_soc": r.target_soc, "action": action,
-                "reason": f"DP-planning: {r.action_kwh:+.1f} kWh bij €{r.price_eur:.4f}/kWh (cyclusbudget {cycle_budget}/dag)",
+                "reason": f"DP-planning: {r.action_kwh:+.1f} kWh bij €{r.price_eur:.4f}/kWh (incl. slijtagekost, stap {step_hours*60:.0f} min)",
                 "price_eur": round(r.price_eur, 5), "sustainability": r.sustainability_score,
             }
+        self._set_plan(plan)
+
+    def _on_dp_solve_done(self, _future) -> None:
+        """Wordt aangeroepen zodra de (mogelijk verlaten) executor-thread echt
+        klaar is. Pas dan mag een volgende DP-rebuild starten -- anders zou
+        een trage berekening (die wait_for al liet verlopen) alsnog naast een
+        nieuwe kunnen blijven draaien en de executor-pool uitputten."""
+        self._dp_building = False
+
+    def _set_plan(self, plan: dict) -> None:
+        """Slaat het plan op en bouwt een gesorteerde sleutel-index zodat
+        _plan_entry_at() met bisect kan zoeken (O(log n)) i.p.v. een lineaire
+        scan (O(n)) -- essentieel nu kwartier-data het plan 4-5x groter maakt."""
         self._plan = plan
+        self._plan_keys_sorted = sorted(
+            k for k in plan.keys() if hasattr(k, "tzinfo")
+        )
+
+    def _plan_entry_at(self, dt_utc: datetime) -> dict:
+        step = timedelta(hours=self._plan_step_hours or 1.0)
+        if self._plan_keys_sorted:
+            idx = bisect.bisect_right(self._plan_keys_sorted, dt_utc) - 1
+            if 0 <= idx < len(self._plan_keys_sorted):
+                ts = self._plan_keys_sorted[idx]
+                if ts <= dt_utc < ts + step:
+                    return self._plan.get(ts, {})
+        if not self._plan:
+            return {}
+        return self._plan.get(dt_utc.astimezone().hour, {})
+
     async def handle_p1_update(self, event=None):
         now = datetime.now()
         now_local = now.astimezone()
@@ -1024,25 +1207,22 @@ class BatteryCoordinator:
                 charge_per_phase = min(inv_max_per_phase, max_charge_w / 3)
                 p_bat_phases = [charge_per_phase] * 3
 
-        elif mode == MODE_SMART_PRO:
+        elif mode == MODE_AUTO:
             ps_active_this_cycle = False
 
             house_reserve_soc = self.data.get("_house_reserve_soc", min_soc + 10.0)
 
-            forecast = self.data.get("_price_forecast", [])
-            tariff_cls = "normal"
-            if forecast:
-                prices = [e.get("price_eur", 0) for e in forecast]
-                prices_sorted = sorted(prices)
-                n = len(prices_sorted)
-                p_cheap_thr = prices_sorted[max(0, int(n * PRICE_PERCENTILE_CHEAP / 100) - 1)]
-                p_exp_thr   = prices_sorted[min(n-1, int(n * PRICE_PERCENTILE_EXPENSIVE / 100))]
-                if price < PRICE_NEGATIVE_THRESHOLD:
-                    tariff_cls = "negative"
-                elif price <= p_cheap_thr:
-                    tariff_cls = "cheap"
-                elif price >= p_exp_thr:
-                    tariff_cls = "expensive"
+            plan_action_now = self.data.get("plan_action", "")
+            if price < PRICE_NEGATIVE_THRESHOLD:
+                tariff_cls = "negative"
+            elif "Laden" in plan_action_now:
+                tariff_cls = "cheap"
+            elif "Ontladen" in plan_action_now:
+                tariff_cls = "expensive"
+            else:
+                tariff_cls = "normal"
+
+            plan_is_hold = "Vasthouden" in plan_action_now
 
             for i in range(3):
                 p_phase = p_net_phases[i]
@@ -1057,7 +1237,12 @@ class BatteryCoordinator:
                                           max_charge_w / 3)
                     continue
 
-                ps_soc_ok = (soc > ps_min_soc + 2.0) or (self._ps_active and soc > ps_min_soc + 0.5)
+                # Zolang het DP-plan "Vasthouden" adviseert, mag eigenverbruik/PS de
+                # batterij alleen ontladen tot de systeem-berekende huisreserve --
+                # daaronder beschermt het plan iets specifieks (dure periode, PV-tekort)
+                # dat niet zomaar overruled moet worden door een klein beetje huisverbruik.
+                ps_floor = max(ps_min_soc + 2.0, house_reserve_soc) if plan_is_hold else ps_min_soc + 2.0
+                ps_soc_ok = (soc > ps_floor) or (self._ps_active and soc > ps_floor - 1.5)
                 if p_phase > POWER_ACTIVE_THRESHOLD_W and ps_soc_ok:
                     ps_deliver = min(p_phase, ps_threshold_w,
                                      inv_max_per_phase, max_discharge_w / 3)
@@ -1344,25 +1529,9 @@ class BatteryCoordinator:
             exp = self._safe_state(self._config.get(f"l{i}_export_kw", "")) * 1000
             p_net_phases.append(imp - exp)
 
-        if self._config.get("pv_present", False):
-            pv_sensor_id = self._config.get("solar_forecast_sensor", "")
-            pv_kwh_raw = self._safe_state(pv_sensor_id, fallback=0.0)
-            if pv_kwh_raw > 0:
-                pv_wh_total = pv_kwh_raw * 1000
-                weights = []
-                for h in range(24):
-                    exp_val = -((h - SOLAR_GAUSS_PEAK_HOUR) ** 2) / (2 * SOLAR_GAUSS_SIGMA ** 2)
-                    weights.append(math.exp(exp_val))
-                total_w = sum(weights)
-                pv_hourly_now = [(w / total_w) * pv_wh_total for w in weights]
-                self.data["pv_forecast_today_kwh"] = round(pv_kwh_raw, 3)
-                self.data["_pv_hourly"] = pv_hourly_now
-            else:
-                self.data["pv_forecast_today_kwh"] = 0.0
-                self.data["_pv_hourly"] = [0.0] * 24
-        else:
-            self.data["pv_forecast_today_kwh"] = 0.0
-            self.data["_pv_hourly"] = [0.0] * 24
+        await self._refresh_solar_forecast(now_local)
+        self.data["_pv_hourly"] = self._get_pv_hourly_forecast()
+        self.data["pv_forecast_today_kwh"] = round(sum(self.data["_pv_hourly"]) / 1000, 3)
 
         p_bat_contribution = max(0.0, -self.data["p_total"])
         p_gross_consumption_kw = (sum(p_net_phases) + p_bat_contribution) / 1000
@@ -1380,6 +1549,23 @@ class BatteryCoordinator:
                 self._profile_days[day][hour] = set(sorted(slot_days)[-PROFILE_DAYS_CAP:])
 
         self._update_profile_progress()
+        self._evaluate_forecast_learning(now_local, p_gross_consumption_kw)
+        if now_local.hour != self._last_forecast_record_hour:
+            self._last_forecast_record_hour = now_local.hour
+            day_rec = now_local.weekday()
+            hour_rec = now_local.hour
+            profiel_w_rec = self._profile[day_rec][hour_rec] * 1000
+            if profiel_w_rec < 1.0:
+                all_vals_rec = [v * 1000 for row in self._profile for v in row if v > 0]
+                profiel_w_rec = (sum(all_vals_rec) / len(all_vals_rec)) if all_vals_rec else 350.0
+            pv_hourly_rec = self.data.get("_pv_hourly", [0.0] * 24)
+            pv_w_rec = pv_hourly_rec[hour_rec] if hour_rec < len(pv_hourly_rec) else 0.0
+            forecast_learning.record_prediction(
+                self._forecast_learning,
+                now_local.strftime("%Y-%m-%d-%H"),
+                pv_w_rec,
+                profiel_w_rec,
+            )
 
         try:
             install_dt = datetime.strptime(self.data.get("install_date", ""), "%Y-%m-%d")
@@ -1441,8 +1627,18 @@ class BatteryCoordinator:
         house_reserve = max(house_reserve_raw, ps_min_soc_conf, min_soc_hard)
         self.data["_house_reserve_soc"] = round(house_reserve, 1)
 
+        day_of_week_load = now_local.weekday()
+        load_forecast_w = []
+        for offset_load in range(24):
+            hour_load = (now_local.hour + offset_load) % 24
+            profiel_w_load = self._profile[day_of_week_load][hour_load] * 1000
+            if profiel_w_load < 1.0:
+                profiel_w_load = conservative_w * 1.2 if 7 <= hour_load < 22 else conservative_w * 0.6
+            load_forecast_w.append(round(profiel_w_load, 1))
+        self.data["verbruik_forecast_w"] = load_forecast_w
+
         mode = self.data["mode"]
-        if mode == MODE_SMART_PRO:
+        if mode == MODE_AUTO:
             price_forecast = self._parse_price_forecast()
             self.data["_price_forecast"] = price_forecast
             spread_prices = [e.get("price_eur", 0) for e in price_forecast] if price_forecast else [price]
@@ -1454,28 +1650,23 @@ class BatteryCoordinator:
             self.data["day_spread_eur"] = round(day_spread_now, 4)
             self.data["arbitrage_actief"] = spread_scale_now > 0.0
 
-            if (now_local.hour != self._last_plan_hour or not self._plan) and self.data.get("use_dp_optimizer", True):
-                pass  # DP-route zet self._plan al; oude regel wordt hieronder opgeruimd
-                # (opgeruimd regel 1)
-                # (opgeruimd regel 2)
-                # (opgeruimd regel 3 - overtollige sluithaak verwijderd)
-                self._build_plan_dp(now_local, price_forecast, profile_weight=profile_weight)
+            now_utc_check = now_local.astimezone(timezone.utc)
+            plan_needs_rebuild = not self._plan or not self._plan_entry_at(now_utc_check)
+            if plan_needs_rebuild and self.data.get("use_dp_optimizer", True) and not self._dp_building:
+                await self._build_plan_dp(now_local, price_forecast, profile_weight=profile_weight)
                 self._last_plan_hour = now_local.hour
                 self.data["_plan_full"] = self._plan
                 self.data["plan_savings_24h"] = self._estimated_savings_24h(self._plan)
-
-            if (now_local.hour != self._last_plan_hour or not self._plan) and not self.data.get("use_dp_optimizer", True):
-                self._plan = self._build_plan(
+            if plan_needs_rebuild and not self.data.get("use_dp_optimizer", True):
+                self._set_plan(self._build_plan(
                     now_local, p_net_phases, price_forecast,
                     profile_weight=profile_weight,
-                )
+                ))
                 self._last_plan_hour = now_local.hour
                 self.data["_plan_full"] = self._plan
                 self.data["plan_savings_24h"] = self._estimated_savings_24h(self._plan)
-
-            current_plan = self._plan.get(now_local.hour, {})
-            next_hour = (now_local.hour + 1) % 24
-            next_plan = self._plan.get(next_hour, {})
+            current_plan = self._plan_entry_at(now_utc_check)
+            next_plan = self._plan_entry_at(now_utc_check + timedelta(hours=self._plan_step_hours or 1.0))
 
             base_action = current_plan.get("action", "N.v.t.")
             self.data["plan_soc_target"] = current_plan.get("target_soc", self.data["soc"])
@@ -1483,6 +1674,10 @@ class BatteryCoordinator:
 
             if base_action in ("Vasthouden", "N.v.t.") and self.data.get("peak_shaving_actief"):
                 self.data["plan_action"] = f"{base_action} (PS actief)"
+            elif "Vasthouden" in base_action and self.data.get("peak_shaving_actief"):
+                # Dekt ook DP-optimizer teksten als "Vasthouden (DP-optimaal)" en
+                # greedy-planner varianten als "Vasthouden (spread te klein)".
+                self.data["plan_action"] = f"{base_action} + Eigenverbruik/PS actief"
             else:
                 self.data["plan_action"] = base_action
 
@@ -1498,12 +1693,8 @@ class BatteryCoordinator:
         price = self._safe_state(zonneplan_id, fallback=0.0)
         if price > 10.0:
             price = price / ZONNEPLAN_PRICE_DIVISOR
-        contract_type = self._config.get("contract_type", CONTRACT_DYNAMIC)
-        if contract_type == CONTRACT_FIXED:
-            fixed_price = self._config.get("fixed_price_eur", 0.25)
-            effective_price = price if price > 0.01 else fixed_price
-        else:
-            effective_price = price
+        fixed_price = float(self._config.get("fixed_price_eur", 0.25))
+        effective_price = price if price > 0.01 else fixed_price
 
         if effective_price > 0:
             p_total_raw = self.data["p_total"]
@@ -1597,7 +1788,7 @@ class BatteryCoordinator:
 
 
 class BatterySensor(SensorEntity):
-    def __init__(self, coordinator, name_suffix, data_key, unit, device_class):
+    def __init__(self, coordinator, name_suffix, data_key, unit, device_class, enabled: bool = True):
         self._coordinator = coordinator
         self._attr_name = f"BatteryLabs {name_suffix}"
         self._data_key = data_key
@@ -1613,6 +1804,7 @@ class BatterySensor(SensorEntity):
             self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_unique_id = f"bl_{data_key}_{coordinator._entry_id}"
         self._attr_should_poll = False
+        self._attr_entity_registry_enabled_default = enabled
 
     async def async_added_to_hass(self):
         self._coordinator.register_listener(self._on_update)
@@ -1635,13 +1827,14 @@ class BatterySensor(SensorEntity):
 
 
 class BatteryTextSensor(SensorEntity):
-    def __init__(self, coordinator, name_suffix, data_key, icon):
+    def __init__(self, coordinator, name_suffix, data_key, icon, enabled: bool = True):
         self._coordinator = coordinator
         self._attr_name = f"BatteryLabs {name_suffix}"
         self._data_key = data_key
         self._attr_icon = icon
         self._attr_unique_id = f"bl_txt_{data_key}_{coordinator._entry_id}"
         self._attr_should_poll = False
+        self._attr_entity_registry_enabled_default = enabled
 
     async def async_added_to_hass(self):
         self._coordinator.register_listener(self._on_update)
@@ -1651,11 +1844,22 @@ class BatteryTextSensor(SensorEntity):
 
     @property
     def native_value(self):
-        return self._coordinator.data.get(self._data_key, "N.v.t.")
+        value = self._coordinator.data.get(self._data_key, "N.v.t.")
+        # HA rejects states longer than 255 characters: the state falls back
+        # to unknown and an error is logged on every update. Truncate the
+        # state; the full text stays available in the volledige_tekst
+        # attribute below.
+        if isinstance(value, str) and len(value) > 255:
+            return value[:254] + "…"
+        return value
 
     @property
     def extra_state_attributes(self) -> dict:
-        return _build_attributes(self._coordinator, self._data_key)
+        attrs = _build_attributes(self._coordinator, self._data_key)
+        value = self._coordinator.data.get(self._data_key)
+        if isinstance(value, str) and len(value) > 255:
+            attrs = {**(attrs or {}), "volledige_tekst": value}
+        return attrs
 
     @property
     def device_info(self):
@@ -1705,7 +1909,6 @@ class BatteryStatusSensor(SensorEntity):
             "peak_shaving_min_soc_pct": c.data.get("peak_shaving_min_soc", 15.0),
             "arbitrage_actief": c.data.get("arbitrage_actief", False),
             "dp_optimizer_actief": c.data.get("use_dp_optimizer", True),
-            "dp_cyclusbudget_per_dag": c.data.get("cycle_budget_per_day", 1.5),
             "dagspread_eur": c.data.get("day_spread_eur", 0.0),
         }
 
@@ -1715,13 +1918,14 @@ class BatteryStatusSensor(SensorEntity):
 
 
 class BatteryInverterStatusSensor(SensorEntity):
-    def __init__(self, coordinator, phase, data_key):
+    def __init__(self, coordinator, phase, data_key, enabled: bool = True):
         self._coordinator = coordinator
         self._attr_name = f"BatteryLabs Inverter {phase} Status"
         self._attr_unique_id = f"bl_stat_{phase}_{coordinator._entry_id}"
         self._data_key = data_key
         self._phase_idx = int(phase[1]) - 1
         self._attr_should_poll = False
+        self._attr_entity_registry_enabled_default = enabled
 
     async def async_added_to_hass(self):
         self._coordinator.register_listener(self._on_update)
@@ -1813,6 +2017,26 @@ def _device_info(coordinator) -> dict:
         "model": "Smart 3-Phase Simulator",
         "sw_version": "4.0.0",
     }
+
+
+def _plan_to_hourly_array(coordinator, now_utc, field, fallback):
+    result = []
+    base = now_utc.replace(minute=0, second=0, microsecond=0)
+    for offset in range(24):
+        entry = coordinator._plan_entry_at(base + timedelta(hours=offset))
+        result.append(entry.get(field, fallback) if entry else fallback)
+    return result
+
+
+def _find_peak_hour(plan: dict, kind: str) -> str:
+    if not plan:
+        return "onbekend"
+    if kind == "expensive":
+        ts = max(plan.keys(), key=lambda k: plan[k].get("price_eur", 0))
+    else:
+        ts = min(plan.keys(), key=lambda k: plan[k].get("price_eur", 0))
+    if hasattr(ts, "astimezone"):
+        return ts.astimezone().strftime("%H:%M")
 
 
 def _build_attributes(coordinator, data_key: str) -> dict:
@@ -1957,16 +2181,29 @@ def _build_attributes(coordinator, data_key: str) -> dict:
         }
 
     if data_key in ("plan_action", "plan_next_action"):
-        current_hour = datetime.now().astimezone().hour
+        now_utc = datetime.now(timezone.utc)
         plan = d.get("_plan_full", {})
-        entry = plan.get(current_hour, {})
+        entry = c._plan_entry_at(now_utc)
+        reden = entry.get("reason", "")
+        if d.get("peak_shaving_actief") and "Vasthouden" in entry.get("action", ""):
+            reden = (
+                f"{reden} | LET OP: DP-plan adviseert vasthouden, maar eigenverbruik/"
+                f"piekshaving is nu actief en ontlaadt de batterij om huisverbruik te "
+                f"dekken (drempel {d.get('peak_shaving_threshold_w', 2200.0)/1000:.1f} kW/fase). "
+                f"Dit heeft voorrang op het DP-plan."
+            )
         return {
-            "reden": entry.get("reason", ""),
+            "reden": reden,
             "prijs_huidig_uur_eur": entry.get("price_eur", d.get("_price_now", 0.0)),
             "duurste_uur_vandaag": _find_peak_hour(plan, "expensive"),
             "goedkoopste_uur_vandaag": _find_peak_hour(plan, "cheap"),
             "plan_actief": bool(plan),
             "sustainability_score": entry.get("sustainability", 0),
+            "plan_stap_minuten": round((c._plan_step_hours or 1.0) * 60),
+            "soc_forecast_24h": _plan_to_hourly_array(c, now_utc, "target_soc", d.get("soc", 50.0)),
+            "prijs_forecast_24h": _plan_to_hourly_array(c, now_utc, "price_eur", d.get("_price_now", 0.0)),
+            "verbruik_forecast_24h": d.get("verbruik_forecast_w", []),
+            "pv_forecast_24h": d.get("_pv_hourly", []),
         }
 
     if data_key == "plan_soc_target":
@@ -2025,13 +2262,3 @@ def _build_attributes(coordinator, data_key: str) -> dict:
         }
 
     return {}
-
-
-def _find_peak_hour(plan: dict, kind: str) -> str:
-    if not plan:
-        return "onbekend"
-    if kind == "expensive":
-        hour = max(plan.keys(), key=lambda h: plan[h].get("price_eur", 0))
-    else:
-        hour = min(plan.keys(), key=lambda h: plan[h].get("price_eur", 0))
-    return f"{hour:02d}:00"

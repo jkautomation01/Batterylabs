@@ -1,33 +1,35 @@
 # BatteryLabs 3-Phase
 
 ![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5?style=for-the-badge&logo=homeassistantcommunitystore)
-![Version](https://img.shields.io/badge/version-4.0.0-blue?style=for-the-badge)
+![Version](https://img.shields.io/badge/version-5.0.0-blue?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-Apache%202.0-green?style=for-the-badge)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.6%2B-41BDF5?style=for-the-badge&logo=homeassistant)
 
-A full software simulation and optimization engine for a 3-phase home battery system (Pylontech US-series + Victron MultiPlus-II), driven entirely by your live smart meter data and a dynamic energy contract.
+A full software simulation and optimization engine for a 3-phase home battery system (Pylontech US-series + Victron MultiPlus-II), driven entirely by your live smart meter data — configured with just a handful of settings, like a real battery-plus-inverter product.
 
 ## Introduction & Features
 
 BatteryLabs 3-Phase does not talk to physical battery hardware — it **simulates** a complete 3-phase battery system in software, and calculates in real time what a real system *should* do: when to charge, when to discharge, and how deep, given your actual household consumption and current electricity prices. It is designed for anyone who wants to model, validate, or forecast battery behavior before (or instead of) buying physical hardware, or who wants a research-grade optimizer running as a "shadow" alongside a planned purchase.
 
 **Key features:**
-- 🧮 **Mathematically optimal 24h planning** via dynamic programming — not a greedy rule-of-thumb, but a true cost-minimizing charge/discharge schedule across the full price forecast horizon
-- 📈 **Spread-based arbitrage** — only trades aggressively when the daily price spread justifies the cycle wear
+- 🧮 **Mathematically optimal planning** via dynamic programming — not a greedy rule-of-thumb, but a true cost-minimizing charge/discharge schedule across the full price forecast horizon (hourly or quarter-hourly, whatever your price sensor provides)
+- 💡 **Economic wear-cost model** — instead of a hand-set cycle budget, every discharge decision is weighed against the real cost of battery wear (derived from your battery model's replacement cost and degradation curve), so the optimizer cycles less on small price spreads and more on large ones, automatically
 - 🔌 **Feed-in tariff awareness** — values unused solar surplus against a configurable feed-in price, so it keeps working correctly even after net-metering (saldering) is phased out
 - 🤖 **Built-in system advisor** — continuously compares your configured hardware against all supported alternatives and gives concrete, numbers-backed upgrade suggestions
 - ⚡ **Realtime peak shaving** with hysteresis to avoid on/off pendulum behavior
 - 🌡️ **Thermal modeling** for both battery and inverter, with temperature-dependent power derating
 - 📊 **Self-learning consumption profile** (7×24 EMA matrix) that improves planning accuracy over weeks
-- ☀️ **Solar forecast integration** — spreads a daily PV total across the day via a Gaussian curve
+- ☀️ **Real hourly solar forecasts** — pulls genuine hour-by-hour PV predictions from the `forecast.solar` service when available, falling back to a Gaussian-curve estimate otherwise
+- 🎯 **Forecast self-correction** — continuously compares its own PV and consumption predictions against what actually happened, and learns an hour-by-hour correction factor that keeps improving accuracy over time
+- 🙈 **Minimal by default** — only the handful of sensors you actually need to see are visible out of the box; every diagnostic/advanced sensor still exists and can be switched on individually via Settings → Entities
 - 🛡️ **Fail-safe by design** — if the optimizer errors out for any reason, the system automatically falls back to a proven heuristic instead of stalling
 
 ## Requirements
 
 - Home Assistant 2026.6.x or newer
 - Six P1 smart meter power sensors (import + export in kW, per phase — L1/L2/L3)
-- A dynamic energy price sensor with an hourly `forecast` attribute (tested with Zonneplan), **or** a fixed-tariff contract with time blocks
-- Optional: a `forecast.solar`-style daily PV yield sensor
+- Optional: a dynamic energy price sensor with an hourly `forecast` attribute (tested with Zonneplan) — without one, or whenever it has no usable forecast, the system simply uses your configured fixed price
+- Optional: a `forecast.solar` sensor for real hourly PV forecasts
 - No external Python dependencies (no `scipy` required) — pure standard library
 
 ## Installation
@@ -49,14 +51,11 @@ Configuration is done **entirely through the UI** — no YAML required.
 
 1. Go to **Settings → Devices & Services → Add Integration**
 2. Search for "BatteryLabs 3-Phase"
-3. Follow the setup wizard (7 steps):
-   - **P1 sensors** — assign your six import/export power sensors and a temperature sensor
-   - **Hardware** — select battery model, module count, inverter model, minimum SoC, cost
-   - **Contract type** — dynamic (hourly forecast) or fixed (time blocks)
-   - **Pricing** — your price sensor, or fixed price + time blocks
-   - **Feed-in tariff** — fixed value or sensor-linked (see below)
-   - **Solar** — enable/disable PV forecast integration
-   - **EV reserve** — optional EV-charging awareness sensor and reserve SoC
+3. Follow the setup wizard (4 steps):
+   - **Sensors** — assign your six import/export power sensors (temperature sensor is optional, defaults to 20°C)
+   - **Hardware** — select battery model, module count, inverter model, minimum SoC (system cost is optional, defaults to 0 = no ROI calculation)
+   - **Energy** — optional price sensor (used automatically if it has an hourly forecast), fixed price, and feed-in tariff
+   - **Solar** — optional `forecast.solar` sensor; leave empty if you have no panels
 
 All settings can be changed afterwards via **Settings → Devices & Services → BatteryLabs 3-Phase → Configure**, which opens a menu with each section editable independently.
 
@@ -88,17 +87,18 @@ All settings can be changed afterwards via **Settings → Devices & Services →
 
 Every sensor exposes additional `attributes` with the underlying calculation detail — click any entity to see exactly why it reports what it does.
 
+Most of these sensors are **hidden by default** — only a handful of core sensors (SoC, total battery power, State of Health, total savings, ROI, system status, current action, current-hour plan action, and learning-profile progress) are visible out of the box, to keep the entity list manageable. Every other sensor listed above still exists and keeps updating in the background; enable any of them individually via **Settings → Devices & Services → Entities**, search for "BatteryLabs", and toggle the ones you want to see.
+
 ## Options / Settings
 
-Adjustable live via number sliders, without restarting Home Assistant:
+Peak shaving stays adjustable live via number sliders, without restarting Home Assistant:
 
 | Setting | Range | Default | Effect |
 |---|---|---|---|
 | Peak Shaving Drempel | 500–7000 W | 2200 W | Per-phase import power above which the battery discharges to shave the peak. |
 | Peak Shaving Min SoC | 5–50% | 15% | Floor below which peak shaving stops and which now also acts as a hard floor for the household reserve. |
-| Cyclusbudget per Dag | 0.2–3.0 cycles/day | 1.5 | Risk dial for the optimizer: how many full charge/discharge cycles it may use per day. Lower = conservative, higher = aggressive. |
 
-Additional settings (hardware model, contract type, feed-in tariff mode, EV reserve) are configured through the **Configure** menu described above.
+There is no manual cycle-budget dial anymore — the optimizer weighs every discharge decision against the real economic cost of battery wear instead (see Key Features above). Hardware model, price/feed-in settings and the solar forecast sensor are configured through the **Configure** menu described above.
 
 ## Debugging
 

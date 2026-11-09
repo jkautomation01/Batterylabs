@@ -75,11 +75,9 @@ TEMP_BAT_CAUTION_LOW = 5.0
 # ---------------------------------------------------------------------------
 # Modi
 # ---------------------------------------------------------------------------
-MODE_ECO = "Eco (Zelfverbruik)"
-MODE_SMART = "Smart (Dynamic)"
-MODE_FORCE = "Full Charge (Force)"
-MODE_SMART_PRO = "Smart Pro (Predictief)"
-ALL_MODES = [MODE_ECO, MODE_SMART, MODE_FORCE, MODE_SMART_PRO]
+MODE_AUTO = "Automatisch"
+MODE_FORCE = "Noodlading (Volladen)"
+ALL_MODES = [MODE_AUTO, MODE_FORCE]
 
 # ---------------------------------------------------------------------------
 # Voortgangsstatus labels
@@ -104,11 +102,6 @@ FIXED_CONTRACT_TIME_BLOCKS_DEFAULT = [
     (16, 23, "expensive"),  # Avondpiek: koken, entertainment, laden auto
     (23, 24, "cheap"),      # Late nacht: laag verbruik
 ]
-
-# ---------------------------------------------------------------------------
-# EV-bewustzijn
-# ---------------------------------------------------------------------------
-EV_MIN_SOC_DEFAULT = 40.0           # % — default reserve tijdens EV-laden
 
 # ---------------------------------------------------------------------------
 # Systeemaanbeveling — drempelwaarden

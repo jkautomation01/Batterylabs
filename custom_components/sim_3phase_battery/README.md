@@ -25,7 +25,7 @@ Most energy plugins just count kWh and stop there. BatteryLabs goes further:
 The simulation is based on the official datasheets from Victron and Pylontech. The inverter derates at high temperatures. The battery loses capacity in the cold. Efficiency isn't a fixed 95% but a quadratic curve — because an inverter simply performs differently at 10% load than at full power. This makes the simulation feel like a real installation.
 
 **🧠 A battery that learns**
-The *Smart Pro* mode builds a profile of your consumption pattern over 2 to 4 weeks. Daily routines, weekend behavior, morning peaks and evening peaks — the integration learns them all. From that point on, the battery no longer reacts purely to the P1 meter, but **proactively anticipates what's coming**.
+The integration builds a profile of your consumption pattern over 2 to 4 weeks. Daily routines, weekend behavior, morning peaks and evening peaks — it learns them all. From that point on, the battery no longer reacts purely to the P1 meter, but **proactively anticipates what's coming**. On top of that, a forecast-learning layer compares its own PV and consumption predictions against what actually happened each hour, and keeps correcting itself.
 
 **📈 Price optimization based on real tariff data**
 With a Zonneplan dynamic contract, the integration knows energy prices for the next 48 hours. Cheap hours (night, midday sun), expensive hours (morning and evening peaks) — the system automatically plans when to charge, when to discharge, and when to hold the charge for when it's really needed. Even **negative prices** are recognized: if the grid pays you to consume electricity, the battery charges.
@@ -64,21 +64,15 @@ Configurable from 1 to 16 modules in parallel — from 2.4 kWh to 76.8 kWh. The 
 
 ---
 
-## The four modes
+## The two modes
 
-### 🌿 Eco (Self-consumption)
-The battery follows the P1 meter purely. Solar surplus goes into the battery; as soon as the house draws power, the battery delivers it. Simple, stable, always available.
+BatteryLabs now works like a real battery-plus-inverter product: just two modes, both always active without any "which strategy should I pick" decision to make.
 
-### ⚡ Smart (Dynamic)
-Reacts intelligently to instantaneous consumption per phase. The battery balances per phase and minimizes grid import — without looking ahead.
+### ⚡ Automatisch (Automatic)
+The normal, always-on mode. Combines your consumption profile, PV production forecast, and (if configured) hourly price data into a continuously-updated **optimal plan**, computed by the dynamic-programming optimizer. The integration independently decides when to charge, when to discharge, and when to hold — weighing real battery wear cost against the savings, with the sole goal of maximizing self-consumption and minimizing energy costs. While the learning profile is still young (first 2 weeks), planning leans more on simple price arbitrage; it automatically leans more heavily on your learned consumption pattern as more data comes in, and is fully reliable after 4 weeks. You can track progress via the *Learning Profile Progress* sensor.
 
-### 🔋 Full Charge (Force)
-The battery charges to 100% as fast as possible. Handy for when a power outage is expected, or if you manually want to build up a full charge.
-
-### 🤖 Smart Pro (Predictive)
-The most intelligent mode. Combines your consumption profile, PV production forecast, and Zonneplan's hourly prices into a **24-hour plan**. The integration independently decides when to charge, when to discharge, when to wait — with the sole goal of maximizing self-consumption and minimizing energy costs.
-
-> **Note:** Smart Pro needs a learning period of at least 2 weeks. During that time, the integration automatically runs in Smart Dynamic mode. After 4 weeks the profile is fully reliable. You can track progress via the *Learning Profile Progress* sensor.
+### 🔋 Noodlading (Volladen) — Force charge
+The battery charges to 100% as fast as possible. Handy for when a power outage is expected, or if you manually want to build up a full charge. Switch back to Automatisch when you're done.
 
 ---
 
@@ -97,11 +91,15 @@ Copy the `sim_3phase_battery` folder to your Home Assistant configuration direct
 ```
 /config/custom_components/sim_3phase_battery/
 ├── __init__.py
+├── advisor.py
 ├── button.py
 ├── config_flow.py
 ├── const.py
+├── dp_optimizer.py
+├── forecast_learning.py
 ├── hardware_profiles.py
 ├── manifest.json
+├── number.py
 ├── select.py
 └── sensor.py
 ```
@@ -116,29 +114,25 @@ Go to **Settings → Devices & Services → Add Integration** and search for *Ba
 
 ### Step 4 — Configure
 
-Fill in the form:
+A short, 4-step wizard — no hardware degree needed:
 
-**P1 sensors**
-Assign the import and export sensor for each phase. These are typically sensors from your DSMR or Smart Meter integration in kW.
+**1. Sensors**
+Assign the import and export sensor for each phase (typically from your DSMR or Smart Meter integration, in kW). A temperature sensor is optional (defaults to 20°C if left out).
 
-**Environment**
-- *Price sensor* — the sensor providing the current energy price in €/kWh
-- *Temperature sensor* — an outdoor or indoor temperature sensor
-
-**Hardware**
+**2. Hardware**
 - *Battery model* — choose the Pylontech model closest to your situation
 - *Number of modules* — how many modules in parallel (1–16)
 - *Inverter model* — choose the Victron MultiPlus-II model
-
-**Settings**
 - *Minimum SoC* — the lower bound for discharging (recommended: 10%)
-- *Update interval* — how often the simulation is calculated, in seconds (default: 5s)
-- *System cost* — the purchase value of the system in euros, for ROI calculation
+- *System cost* — optional purchase value of the system in euros, for ROI calculation (0 = skip ROI)
 
-**Smart Pro (optional)**
-- *Zonneplan sensor* — the sensor with the `forecast` attribute for hourly prices
-- *PV present* — enable if you have solar panels
-- *Forecast.solar sensor* — the sensor with the expected daily production in kWh
+**3. Energy**
+- *Price sensor* — optional. If it has an hourly `forecast` attribute (tested with Zonneplan), the optimizer automatically plans on real price differences; without one, or whenever it has no usable value, the system simply uses the fixed price below
+- *Fixed price* — your €/kWh rate, used whenever there's no live forecast to plan on
+- *Feed-in tariff* — what unvalued solar surplus is worth, in €/kWh
+
+**4. Solar**
+- *Forecast.solar sensor* — optional. Leave empty if you have no panels; fill it in to get real hourly PV forecasts instead of the Gaussian-curve estimate
 
 ---
 
@@ -176,17 +170,21 @@ After installation, all entities appear under one device: **BatteryLabs Systeem*
 |---|---|
 | Besparing Totaal | Total savings in € — with break-even progress as an attribute |
 | ROI Percentage | Payback percentage based on system cost |
-| Verwachte Besparing 24h | Estimated savings from the current Smart Pro plan |
+| Verwachte Besparing 24h | Estimated savings from the current optimizer plan |
 
-### Smart Pro
+### Optimizer & planning
 | Sensor | Description |
 |---|---|
 | Plan Actie Huidig Uur | What the optimizer is doing right now and why (incl. price as attribute) |
 | Plan SoC Doel | The target charge level for this hour |
 | Volgende Actie | What's planned for the next hour |
-| PV Verwacht Vandaag | Total PV production expected today in kWh |
+| DP Verwachte Kosten | Expected net cost for the remaining planning horizon; negative = projected net earnings |
+| PV Verwacht Vandaag | Total PV production expected today in kWh — from the real forecast.solar hourly data when configured, otherwise a Gaussian-curve estimate |
+| Forecast Leren Samenvatting / Nauwkeurigheid | How well PV and consumption predictions matched reality, and the self-correction learned from it |
 | SoH Degradatie Rate | Current degradation rate in % per month |
 | Leerprofiel Voortgang | 0–100% progress of the learning process |
+
+Most of the sensors above are **hidden by default** to keep the entity list manageable — only the handful of core sensors (SoC, total battery power, State of Health, total savings, ROI, system status, current action, current-hour plan action, and learning-profile progress) show up out of the box. Every other sensor still exists and keeps updating; enable any of them via **Settings → Devices & Services → Entities**, search for "BatteryLabs", and toggle the ones you want.
 
 ### Status & control
 | Entity | Description |
@@ -208,7 +206,7 @@ The *Learning Profile Progress* sensor is your window into how smart the integra
   ~2 weeks   2–4 weeks           4+ weeks
 ```
 
-While learning, the integration automatically runs in Smart Dynamic mode — so you don't miss out on anything. Once 50% is reached (all 168 day×hour combinations seen for at least 2 weeks), Smart Pro activates. After 4 weeks the profile is reliable enough for optimal planning.
+While learning, the optimizer leans more on simple price arbitrage — so you don't miss out on anything. Once 50% is reached (all 168 day×hour combinations seen for at least 2 weeks), the learned consumption profile starts carrying real weight in the plan. After 4 weeks the profile is reliable enough for fully optimal planning.
 
 **When should you reset?**
 - After a major change to your daily routine
@@ -264,14 +262,11 @@ automation:
 **Does this affect my real installation?**
 No. BatteryLabs is a pure simulation — it only reads sensor data and writes to Home Assistant entities. No hardware is controlled.
 
-**I don't have a Zonneplan contract. Does it still work?**
-Yes, fully. Choose *Fixed rate* as the contract type during installation and enter your kWh price. The Smart Pro optimizer then uses time blocks (night/morning peak/day/evening peak) instead of hourly prices to decide when to charge and discharge. You still fully benefit from the learning process, the PV forecast, and all sensors. The time blocks are also configurable if your household follows a different daily pattern than the default.
+**I don't have a dynamic energy contract. Does it still work?**
+Yes, fully. Just leave the price-sensor field empty during setup (or fill in a sensor without an hourly forecast) and enter your fixed kWh price instead. The optimizer then plans purely on your consumption profile and PV forecast rather than hourly price differences — there's no separate "contract type" choice to make, the system detects automatically whether it has a usable price forecast and falls back to your fixed price when it doesn't. You still fully benefit from the learning process, the PV forecast, and all sensors.
 
-**What's the difference between a dynamic and a fixed contract with Smart Pro?**
-With a dynamic contract, the optimizer steers on actual hourly price differences — up to a 60–70% difference between the cheapest and most expensive hour. With a fixed contract, the optimizer steers on time patterns: night and off-peak are "cheap," morning and evening peaks are "expensive." The effect is the same: the battery charges when it's smart to and discharges when needed. Savings are somewhat lower since there's no real price arbitrage, but the self-consumption and avoided-grid-import savings are identical.
-
-**I don't have solar panels. Does Smart Pro still make sense?**
-Absolutely. Without PV, the integration optimizes purely based on the consumption profile and tariff differences. On a dynamic contract there's always a 30–60% difference between the cheapest and most expensive hour of the day.
+**I don't have solar panels. Does it still make sense?**
+Absolutely. Without PV, the integration optimizes purely based on the consumption profile and (if configured) price differences. On a dynamic contract there's typically a 30–60% difference between the cheapest and most expensive hour of the day.
 
 **How accurate are the savings?**
 Savings are calculated based on actual avoided grid import × the actual price at that moment. This is a conservative, realistic calculation — not marketing numbers.
@@ -289,10 +284,14 @@ The integration expects kW. Create a `template sensor` in HA that divides the va
 ### Files
 | File | Function |
 |---|---|
-| `hardware_profiles.py` | Datasheet profiles for Pylontech & Victron |
+| `hardware_profiles.py` | Datasheet profiles for Pylontech & Victron, incl. degradation-per-cycle model |
 | `sensor.py` | Coordinator, simulation logic, all sensors |
+| `dp_optimizer.py` | Dynamic-programming planner (wear-cost based, hour or quarter-hour resolution) |
+| `forecast_learning.py` | EMA self-correction of PV/consumption predictions vs. reality |
+| `advisor.py` | Hardware-sizing advisor logic |
 | `config_flow.py` | Configuration form (setup & edit) |
-| `select.py` | Strategy dropdown |
+| `select.py` | Mode dropdown (Automatisch / Noodlading) |
+| `number.py` | Peak-shaving tuning sliders |
 | `button.py` | Reset learning profile button |
 | `const.py` | All constants and threshold values |
 
@@ -305,6 +304,7 @@ The integration writes two files to your HA config directory:
 ### Version history
 | Version | Highlights |
 |---|---|
+| 5.0.0 | Simplified to two modes (Automatisch/Noodlading), economic wear-cost optimizer (replacing the manual cycle budget), real hourly forecast.solar PV data with self-correcting forecast learning, most sensors hidden by default (enable via Settings → Entities) |
 | 4.0.0 | Smart Pro optimizer, learning process, hardware profiles, attribute layer |
 | 3.0.0 | Bug fixes, async I/O, per-phase sim_p sensors, cleanup on unload |
 | 2.0.0 | 3-phase support, financial sensors, thermal model |
