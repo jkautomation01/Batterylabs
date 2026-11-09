@@ -79,6 +79,8 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         BatterySensor(coordinator, "SoC", "soc", PERCENTAGE, SensorDeviceClass.BATTERY),
         BatterySensor(coordinator, "Batterij Vermogen Totaal", "p_total", UnitOfPower.WATT, SensorDeviceClass.POWER),
         BatterySensor(coordinator, "State of Health", "soh", PERCENTAGE, None),
+        BatterySensor(coordinator, "Batterij Temperatuur", "t_bat", UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE),
+        BatterySensor(coordinator, "Inverter Temperatuur", "t_inv_avg", UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE),
         BatteryTextSensor(coordinator, "Tijd tot Leeg", "time_to_empty", "mdi:battery-clock"),
         BatteryTextSensor(coordinator, "Tijd tot Vol", "time_to_full", "mdi:battery-arrow-up-clock"),
         BatterySensor(coordinator, "Besparing Totaal", "savings", CURRENCY_EURO, SensorDeviceClass.MONETARY),
@@ -381,7 +383,7 @@ class BatteryCoordinator:
             "roi_perc": 0.0, "rte": 100.0, "health_msg": "Healthy",
             "solar_to_bat": 0.0, "solar_to_grid": 0.0,
             "time_to_empty": "N.v.t.", "time_to_full": "N.v.t.",
-            "t_bat": 20.0, "t_inv1": 25.0, "t_inv2": 25.0, "t_inv3": 25.0,
+            "t_bat": 20.0, "t_inv1": 25.0, "t_inv2": 25.0, "t_inv3": 25.0, "t_inv_avg": 25.0,
             "status": "Standby",
             "inv_l1_stat": "Standby", "inv_l2_stat": "Standby", "inv_l3_stat": "Standby",
             "mode": MODE_AUTO,
@@ -1303,6 +1305,10 @@ class BatteryCoordinator:
                 min(self._t_inv_internal[i-1], inv_max_t)
             )
             self.data[t_key] = round(self._t_inv_internal[i-1], 1)
+
+        self.data["t_inv_avg"] = round(
+            (self.data["t_inv1"] + self.data["t_inv2"] + self.data["t_inv3"]) / 3, 1
+        )
 
         t_bat = self.data["t_bat"]
         if t_bat > TEMP_BAT_WARNING_HIGH:
