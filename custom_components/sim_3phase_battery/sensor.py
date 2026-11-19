@@ -86,6 +86,8 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         BatterySensor(coordinator, "Besparing Totaal", "savings", CURRENCY_EURO, SensorDeviceClass.MONETARY),
         BatterySensor(coordinator, "ROI Percentage", "roi_perc", PERCENTAGE, None),
         BatteryStatusSensor(coordinator),
+        BatterySensor(coordinator, "Batterij Geladen Totaal", "energy_in", UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY),
+        BatterySensor(coordinator, "Batterij Ontladen Totaal", "energy_out", UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY),
         BatteryTextSensor(coordinator, "Actie Nu", "actie_uitleg", "mdi:information", enabled=False),
         BatteryTextSensor(coordinator, "Actie Reden", "actie_reden", "mdi:text-box", enabled=False),
         BatteryTextSensor(coordinator, "Plan Actie Huidig Uur", "plan_action", "mdi:lightning-bolt", enabled=False),
