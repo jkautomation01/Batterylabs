@@ -78,6 +78,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     sensors = [
         BatterySensor(coordinator, "SoC", "soc", PERCENTAGE, SensorDeviceClass.BATTERY),
         BatterySensor(coordinator, "Batterij Vermogen Totaal", "p_total", UnitOfPower.WATT, SensorDeviceClass.POWER),
+        BatterySensor(coordinator, "Netto P1 Totaal (Sim)", "sim_p_total", UnitOfPower.WATT, SensorDeviceClass.POWER),
         BatterySensor(coordinator, "State of Health", "soh", PERCENTAGE, None),
         BatterySensor(coordinator, "Batterij Temperatuur", "t_bat", UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE),
         BatterySensor(coordinator, "Inverter Temperatuur", "t_inv_avg", UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE),
